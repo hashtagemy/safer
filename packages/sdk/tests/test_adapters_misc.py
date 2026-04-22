@@ -1,0 +1,115 @@
+"""Tests for the OpenAI partial adapter + the three beta stubs."""
+
+from __future__ import annotations
+
+import logging
+from types import SimpleNamespace
+
+import pytest
+
+
+# ---------- OpenAI partial ----------
+
+
+@pytest.fixture()
+def recording_client(monkeypatch):
+    calls: list[dict] = []
+
+    class _Dummy:
+        def track_event(self, hook, payload, session_id=None, agent_id=None):
+            calls.append(
+                {
+                    "hook": hook.value if hasattr(hook, "value") else str(hook),
+                    "payload": payload,
+                    "session_id": session_id,
+                    "agent_id": agent_id,
+                }
+            )
+
+    from safer import client as client_mod
+
+    monkeypatch.setattr(client_mod, "_client", _Dummy(), raising=False)
+    return calls
+
+
+def _make_fake_openai():
+    """Minimal object shaped enough like an OpenAI client for wrap_openai."""
+
+    def create(**kwargs):
+        return SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    message=SimpleNamespace(content="hello there"),
+                    text=None,
+                )
+            ],
+            usage=SimpleNamespace(prompt_tokens=10, completion_tokens=4),
+        )
+
+    completions = SimpleNamespace(create=create)
+    chat = SimpleNamespace(completions=completions)
+    return SimpleNamespace(chat=chat)
+
+
+def test_openai_wrap_emits_before_and_after(recording_client):
+    from safer.adapters.openai_agents import wrap_openai
+
+    client = wrap_openai(_make_fake_openai(), agent_id="agent_openai")
+    resp = client.chat.completions.create(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": "hi"}],
+    )
+    assert resp.choices[0].message.content == "hello there"
+
+    hooks = [c["hook"] for c in recording_client]
+    assert hooks[0] == "on_session_start"
+    assert "before_llm_call" in hooks
+    assert "after_llm_call" in hooks
+
+
+def test_openai_wrap_records_on_error(recording_client):
+    from safer.adapters.openai_agents import wrap_openai
+
+    def boom(**_kwargs):
+        raise RuntimeError("api exploded")
+
+    inner = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=boom)))
+    client = wrap_openai(inner, agent_id="agent_err")
+    with pytest.raises(RuntimeError):
+        client.chat.completions.create(model="gpt-4o", messages=[])
+
+    hooks = [c["hook"] for c in recording_client]
+    assert "on_error" in hooks
+
+
+# ---------- beta stubs ----------
+
+
+def test_google_adk_stub_is_noop_with_warning(caplog):
+    from safer.adapters.google_adk import wrap_adk
+
+    sentinel = object()
+    with caplog.at_level(logging.WARNING, logger="safer.adapters.google_adk"):
+        out = wrap_adk(sentinel, agent_id="x")
+    assert out is sentinel
+    assert any("google_adk" in rec.message for rec in caplog.records)
+
+
+def test_bedrock_stub_is_noop_with_warning(caplog):
+    from safer.adapters.bedrock import wrap_bedrock
+
+    sentinel = object()
+    with caplog.at_level(logging.WARNING, logger="safer.adapters.bedrock"):
+        out = wrap_bedrock(sentinel, agent_id="x")
+    assert out is sentinel
+    assert any("bedrock" in rec.message for rec in caplog.records)
+
+
+def test_crewai_stub_is_noop_with_warning(caplog):
+    from safer.adapters.crewai import wrap_crew
+
+    sentinel = object()
+    with caplog.at_level(logging.WARNING, logger="safer.adapters.crewai"):
+        out = wrap_crew(sentinel, agent_id="x")
+    assert out is sentinel
+    assert any("crewai" in rec.message for rec in caplog.records)
