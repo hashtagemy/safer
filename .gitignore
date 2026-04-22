@@ -32,6 +32,7 @@ out/
 # Vite / Dashboard
 packages/dashboard/dist/
 packages/dashboard/.vite/
+packages/dashboard/tsconfig.tsbuildinfo
 
 # Env / secrets
 .env
