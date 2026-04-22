@@ -8,13 +8,19 @@ services:
     env_file:
       - .env
     volumes:
-      - ./safer.db:/app/safer.db
-      - ./packages/backend/src:/app/src
+      # Persist the DB as a named volume so the host doesn't have to
+      # pre-create `safer.db`; the container writes directly to it.
+      - safer_db:/app/data
     environment:
-      - SAFER_DB_PATH=/app/safer.db
+      - SAFER_DB_PATH=/app/data/safer.db
       - SAFER_BACKEND_HOST=0.0.0.0
       - SAFER_BACKEND_PORT=8000
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
 
   dashboard:
     build:
@@ -26,5 +32,9 @@ services:
       - VITE_BACKEND_URL=http://localhost:8000
       - VITE_WS_URL=ws://localhost:8000
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
     restart: unless-stopped
+
+volumes:
+  safer_db:
