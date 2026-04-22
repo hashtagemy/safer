@@ -40,6 +40,16 @@ log = logging.getLogger("safer.judge.engine")
 JUDGE_MODEL = os.environ.get("SAFER_JUDGE_MODEL", "claude-opus-4-7")
 MAX_TOKENS = int(os.environ.get("SAFER_JUDGE_MAX_TOKENS", "2000"))
 
+
+def _current_max_tokens() -> int:
+    """Runtime-mutable via /v1/config; falls back to the env-seeded value."""
+    try:
+        from ..runtime_config import get_judge_max_tokens
+
+        return get_judge_max_tokens()
+    except Exception:  # pragma: no cover — tests that don't import runtime_config
+        return MAX_TOKENS
+
 # Pricing per 1M tokens (USD). Must mirror sdk/adapters/claude_sdk._PRICING.
 _PRICING: dict[str, tuple[float, float, float, float]] = {
     "claude-opus-4-7": (15.0, 75.0, 1.5, 18.75),
@@ -160,7 +170,7 @@ async def judge_event(
     t0 = time.monotonic()
     response = await client.messages.create(
         model=JUDGE_MODEL,
-        max_tokens=MAX_TOKENS,
+        max_tokens=_current_max_tokens(),
         temperature=0,
         system=[
             {
@@ -240,7 +250,7 @@ async def _repair_to_json(client: Any, bad_text: str) -> str:
     )
     response = await client.messages.create(
         model=JUDGE_MODEL,
-        max_tokens=MAX_TOKENS,
+        max_tokens=_current_max_tokens(),
         temperature=0,
         messages=[{"role": "user", "content": repair_prompt}],
     )

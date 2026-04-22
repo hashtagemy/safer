@@ -32,7 +32,7 @@ class RunRequest(BaseModel):
     target_system_prompt: str = Field(min_length=1)
     target_tools: list[str] = Field(default_factory=list)
     target_name: str = ""
-    num_attacks: int = Field(default=10, ge=1, le=30)
+    num_attacks: int | None = Field(default=None, ge=1, le=30)
     mode: Literal["managed", "subagent"] | None = None
 
 
@@ -49,16 +49,27 @@ async def kickoff(agent_id: str, request: RunRequest) -> RedTeamRun:
 
         await upsert_agent(agent_id, name=request.target_name or agent_id)
 
+    # Fall back to runtime defaults when the request omits them.
+    from .. import runtime_config
+
     mode: RedTeamMode | None = None
     if request.mode:
         mode = RedTeamMode(request.mode)
+    else:
+        mode = RedTeamMode(runtime_config.get_redteam_default_mode())
+
+    num_attacks = (
+        request.num_attacks
+        if request.num_attacks is not None
+        else runtime_config.get_redteam_default_num_attacks()
+    )
 
     run = await run_redteam(
         agent_id=agent_id,
         target_system_prompt=request.target_system_prompt,
         target_tools=request.target_tools,
         target_name=request.target_name,
-        num_attacks=request.num_attacks,
+        num_attacks=num_attacks,
         mode=mode,
     )
     return run

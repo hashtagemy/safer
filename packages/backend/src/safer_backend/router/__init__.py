@@ -32,15 +32,19 @@ _RECENT_TOOL_CALLS: dict[str, Deque[dict[str, object]]] = defaultdict(
 log = logging.getLogger("safer.router")
 
 
-JUDGE_ENABLED = os.environ.get("SAFER_JUDGE_ENABLED", "auto").lower()
-# auto → enabled iff ANTHROPIC_API_KEY is set; off → disabled; on → forced
-# (Phase 6 lands this; Phase 7+ adds Gateway + Haiku in front.)
-
-
 def _judge_active() -> bool:
-    if JUDGE_ENABLED == "off":
+    """Read the runtime-mutable toggle from runtime_config.
+
+    - "off"  — disabled regardless of key
+    - "on"   — forced (may fail if no key, but that's on the operator)
+    - "auto" — enabled iff ANTHROPIC_API_KEY is present
+    """
+    from ..runtime_config import get_judge_enabled
+
+    mode = get_judge_enabled()
+    if mode == "off":
         return False
-    if JUDGE_ENABLED == "on":
+    if mode == "on":
         return True
     return bool(os.environ.get("ANTHROPIC_API_KEY"))
 
