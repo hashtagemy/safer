@@ -74,11 +74,27 @@ export interface PreStepScoreMsg {
   reason: string;
 }
 
+export interface RedteamPhaseMsg {
+  type: "redteam_phase";
+  run_id: string;
+  agent_id: string;
+  phase: "planning" | "attacking" | "analyzing" | "done" | "failed";
+  mode: "managed" | "subagent";
+  attack_count?: number;
+  attempt_count?: number;
+  findings_count?: number;
+  safety_score?: number;
+  owasp_map?: Record<string, number>;
+  error?: string;
+  received_at: number;
+}
+
 export interface SaferStream {
   events: SaferEvent[];
   verdictsByEventId: Record<string, VerdictMsg>;
   prestepByEventId: Record<string, PreStepScoreMsg>;
   blocks: BlockMsg[];
+  redteamByRunId: Record<string, RedteamPhaseMsg>;
   connected: boolean;
 }
 
@@ -98,6 +114,9 @@ export function useSaferRealtime(limit = 500): SaferStream {
     {}
   );
   const [blocks, setBlocks] = useState<BlockMsg[]>([]);
+  const [redteamByRunId, setRedteam] = useState<Record<string, RedteamPhaseMsg>>(
+    {}
+  );
   const [connected, setConnected] = useState(false);
   const backoffRef = useRef(500);
 
@@ -145,6 +164,11 @@ export function useSaferRealtime(limit = 500): SaferStream {
               });
               break;
             }
+            case "redteam_phase": {
+              const r = { ...(data as RedteamPhaseMsg), received_at: Date.now() };
+              setRedteam((prev) => ({ ...prev, [r.run_id]: r }));
+              break;
+            }
             default:
               // Unknown message kind — ignore.
               break;
@@ -174,5 +198,12 @@ export function useSaferRealtime(limit = 500): SaferStream {
     };
   }, [limit]);
 
-  return { events, verdictsByEventId, prestepByEventId, blocks, connected };
+  return {
+    events,
+    verdictsByEventId,
+    prestepByEventId,
+    blocks,
+    redteamByRunId,
+    connected,
+  };
 }

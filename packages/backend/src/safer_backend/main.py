@@ -12,6 +12,7 @@ from .ingestion.http import router as http_ingest_router
 from .ingestion.ws import router as ws_ingest_router
 from .inspector.api import router as inspector_router
 from .policy_studio.api import router as policy_studio_router
+from .redteam.api import router as redteam_router
 from .session_report.api import router as session_report_router
 from .storage.dao import get_cost_summary, get_stats
 from .storage.db import init_db
@@ -50,6 +51,7 @@ app.include_router(http_ingest_router)
 app.include_router(inspector_router)
 app.include_router(policy_studio_router)
 app.include_router(session_report_router)
+app.include_router(redteam_router)
 
 
 @app.get("/health")
