@@ -38,6 +38,13 @@
     @apply border-border;
   }
 
+  html {
+    /* Tells Chromium / Safari / Firefox that the page is dark so
+       native widgets (date pickers, scrollbars, autofill) invert to
+       match. Without this the calendar-picker icon renders black. */
+    color-scheme: dark;
+  }
+
   body {
     @apply bg-background text-foreground font-sans antialiased;
     font-feature-settings: "tnum";
@@ -46,6 +53,21 @@
 
   code, pre, .mono {
     @apply font-mono;
+  }
+
+  /* Date / time picker — recolour the webkit calendar indicator so
+     the small icon is visible on the dark input. */
+  input[type="date"]::-webkit-calendar-picker-indicator,
+  input[type="datetime-local"]::-webkit-calendar-picker-indicator,
+  input[type="time"]::-webkit-calendar-picker-indicator {
+    filter: invert(82%) sepia(15%) saturate(300%) hue-rotate(168deg) brightness(105%);
+    cursor: pointer;
+    opacity: 0.85;
+  }
+  input[type="date"]::-webkit-calendar-picker-indicator:hover,
+  input[type="datetime-local"]::-webkit-calendar-picker-indicator:hover,
+  input[type="time"]::-webkit-calendar-picker-indicator:hover {
+    opacity: 1;
   }
 
   /* Selection — subtle buz mavisi accent. */
