@@ -1,12 +1,13 @@
 """Closed-vocabulary flag system.
 
-Every persona verdict MUST use flags from this list. Serbest-metin flag
-yasak. Bu sayede compliance raporunda agregasyon, regression diff ve
-OWASP haritası otomatik üretilir.
+Every persona verdict MUST use flags from this list — free-form flag
+strings are not allowed. A closed vocabulary lets the compliance report
+auto-aggregate, regression diffs stay comparable, and the OWASP LLM
+mapping derives deterministically.
 
-Kategoriler her persona'ya ait değil — flag'ler kategori altındadır ve
-birden fazla persona aynı flag'i kullanabilir. Örn. `pii_exposure`
-Compliance Officer + Security Auditor tarafından flag'lenebilir.
+Flags are grouped by semantic category, not by persona. Multiple
+personas may emit the same flag (e.g. `pii_exposure` can come from
+Compliance Officer AND Security Auditor on the same event).
 """
 
 from __future__ import annotations

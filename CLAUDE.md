@@ -18,7 +18,7 @@ Four pillars × four lifecycle phases:
 Lifecycle phases:
 - **Onboarding** — Inspector runs 3 personas (Security, Compliance, Policy Warden) on agent code + AST + deterministic pattern scan, suggests policies
 - **Pre-deploy** — Red-Team Squad runs (manual trigger) via 3 Claude Managed Agents (Strategist → Attacker → Analyst) with Plan B sub-agent fallback
-- **Runtime** — Gateway + Judge + Per-step Haiku (karar anlarında)
+- **Runtime** — Gateway + Judge + Per-step Haiku (at decision hooks only)
 - **Post-run** — Quality Reviewer + Thought-Chain Reconstructor + Session Report
 
 ## Monorepo layout
@@ -47,9 +47,9 @@ roadmap/      — plan + phases
 
 ## Model routing (hard rules)
 
-- **Opus 4.7** — Judge (6 personas, dual-mode), Inspector (3-persona kod taraması), Thought-Chain Reconstructor, Quality Reviewer, Policy Compiler, Red-Team trio.
-- **Haiku 4.5** — Per-step scoring (relevance + escalate combined, karar anlarında), Gateway borderline (stretch).
-- **Sonnet 4.6** — **NOT USED.** v3'te kaldırıldı. Reintroduce etmeyin; bir yerde Sonnet'e ihtiyaç varsa önce tartışın.
+- **Opus 4.7** — Judge (6 personas, dual-mode), Inspector (3-persona code scan), Thought-Chain Reconstructor, Quality Reviewer, Policy Compiler, Red-Team trio.
+- **Haiku 4.5** — Per-step scoring (relevance + escalate combined, at decision hooks only), Gateway borderline (stretch).
+- **Sonnet 4.6** — **NOT USED.** Removed in v3. Do not reintroduce; if you think a task needs Sonnet, open an issue first.
 
 ## Prompt cache (mandatory)
 
@@ -115,15 +115,16 @@ Scopes: `sdk`, `backend`, `dashboard`, `judge`, `inspector`, `gateway`, `redteam
 ## Don't-do list
 
 1. **Don't add other LLM providers.** Claude-only. No OpenAI / Gemini / Llama calls anywhere.
-2. **Don't reintroduce Sonnet 4.6.** v3'te bilinçli kaldırıldı.
-3. **Don't add workspace isolation.** Scope dışı (Gateway zaten kısıtlıyor).
-4. **Don't add Red-Team continuous mode.** Her zaman manuel buton.
+2. **Don't reintroduce Sonnet 4.6.** Deliberately removed in v3.
+3. **Don't add workspace isolation.** Out of scope — the Gateway already restricts tool use.
+4. **Don't add Red-Team continuous mode.** Always a manual button.
 5. **Don't let Judge run on every event.** Router filters strictly; see persona routing table.
 6. **Don't call Claude in Session Report aggregator.** It's pure Python; 0 Claude calls by design.
 7. **Don't hardcode API keys.** `.env` file only, never committed.
 8. **Don't commit the SQLite database.** `*.db` is in `.gitignore`.
 9. **Don't skip prompt cache.** Every Opus call uses it; cache hit is logged.
 10. **Don't use Next.js.** React + Vite is the choice; don't migrate.
+11. **All code, comments, docs, commits, and identifiers in this repo are in English.** SAFER is a global open-source project.
 
 ## Key decisions (locked)
 
