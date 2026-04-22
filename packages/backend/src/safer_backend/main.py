@@ -15,6 +15,7 @@ from .policy_studio.api import router as policy_studio_router
 from .compliance.api import router as compliance_router
 from .redteam.api import router as redteam_router
 from .session_report.api import router as session_report_router
+from .sessions_api import router as sessions_router
 from .storage.dao import get_cost_summary, get_stats
 from .storage.db import init_db
 from .ws_broadcaster import broadcaster
@@ -52,6 +53,7 @@ app.include_router(http_ingest_router)
 app.include_router(inspector_router)
 app.include_router(policy_studio_router)
 app.include_router(session_report_router)
+app.include_router(sessions_router)
 app.include_router(redteam_router)
 app.include_router(compliance_router)
 
