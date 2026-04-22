@@ -144,6 +144,10 @@ async def route_event(event: Event) -> None:
         if personas:
             asyncio.create_task(_run_judge(event, [p.value for p in personas]))
 
+    # 8. Session end → generate the Session Report in the background.
+    if event.hook == Hook.ON_SESSION_END:
+        asyncio.create_task(_run_session_report(event.session_id))
+
 
 async def _run_haiku(event: Event) -> None:
     """Background Haiku per-step scoring. Never blocks ingestion."""
@@ -223,6 +227,30 @@ async def _run_judge(event: Event, active_personas: list[str]) -> None:
                 "confidence": verdict.overall.confidence,
             }
         )
+
+
+async def _run_session_report(session_id: str) -> None:
+    """Generate + persist the Session Report for a just-ended session.
+
+    Runs fully detached from the ingestion path; a failure here never
+    blocks event intake or broadcasting.
+    """
+    try:
+        from ..session_report.orchestrator import generate_report
+
+        report = await generate_report(session_id)
+    except Exception as e:  # pragma: no cover — defensive
+        log.exception("session report generation failed for %s: %s", session_id, e)
+        return
+    await broadcaster.broadcast(
+        {
+            "type": "session_report_ready",
+            "session_id": session_id,
+            "agent_id": report.agent_id,
+            "overall_health": report.overall_health,
+            "total_steps": report.total_steps,
+        }
+    )
 
 
 async def _persist_verdict(verdict, event: Event) -> None:
