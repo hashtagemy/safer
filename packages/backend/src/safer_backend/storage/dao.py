@@ -7,11 +7,14 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timezone
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from safer.events import Event
 
 from .db import get_db
+
+if TYPE_CHECKING:
+    from ..models.policies import ActivePolicy
 
 
 def _utcnow_iso() -> str:
@@ -113,6 +116,104 @@ async def get_stats() -> dict[str, Any]:
         "active_sessions": active_sessions,
         "events": events_count,
     }
+
+
+async def insert_policy(policy: "ActivePolicy") -> None:
+    """Persist a compiled policy. `active=1` by default (activate on insert)."""
+    async with get_db() as db:
+        await db.execute(
+            """
+            INSERT INTO policies
+            (policy_id, agent_id, name, nl_text, rule_json, code_snippet,
+             flag_category, severity, active, guard_mode, created_at, test_cases_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                policy.policy_id,
+                policy.agent_id,
+                policy.name,
+                policy.nl_text,
+                json.dumps(policy.rule_json),
+                policy.code_snippet,
+                policy.flag_category.value if policy.flag_category else None,
+                policy.severity.value,
+                1 if policy.active else 0,
+                policy.guard_mode.value,
+                policy.created_at.isoformat(),
+                json.dumps(
+                    [tc.model_dump(mode="json") for tc in policy.test_cases]
+                ),
+            ),
+        )
+        await db.commit()
+
+
+async def list_policies(
+    agent_id: str | None = None, active_only: bool = True
+) -> list["ActivePolicy"]:
+    """Return policies, optionally filtered to `agent_id` and active rows."""
+    from ..models.policies import ActivePolicy, GuardMode, PolicyTestCase
+    from ..models.findings import Severity
+    from ..models.flags import FlagCategory
+
+    clauses: list[str] = []
+    params: list[Any] = []
+    if active_only:
+        clauses.append("active = 1")
+    if agent_id is not None:
+        clauses.append("(agent_id IS NULL OR agent_id = ?)")
+        params.append(agent_id)
+    where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+
+    async with get_db() as db:
+        async with db.execute(
+            f"""
+            SELECT policy_id, agent_id, name, nl_text, rule_json, code_snippet,
+                   flag_category, severity, active, guard_mode, created_at,
+                   test_cases_json
+            FROM policies
+            {where}
+            ORDER BY created_at DESC
+            """,
+            params,
+        ) as cur:
+            rows = await cur.fetchall()
+
+    out: list[ActivePolicy] = []
+    for row in rows:
+        try:
+            test_cases_raw = json.loads(row[11] or "[]")
+            test_cases = [PolicyTestCase.model_validate(tc) for tc in test_cases_raw]
+        except Exception:
+            test_cases = []
+        out.append(
+            ActivePolicy(
+                policy_id=row[0],
+                agent_id=row[1],
+                name=row[2],
+                nl_text=row[3],
+                rule_json=json.loads(row[4] or "{}"),
+                code_snippet=row[5],
+                flag_category=FlagCategory(row[6]) if row[6] else None,
+                severity=Severity(row[7]) if row[7] else Severity.MEDIUM,
+                active=bool(row[8]),
+                guard_mode=GuardMode(row[9]) if row[9] else GuardMode.INTERVENE,
+                created_at=datetime.fromisoformat(row[10]),
+                test_cases=test_cases,
+            )
+        )
+    return out
+
+
+async def deactivate_policy(policy_id: str) -> bool:
+    """Flip `active=0` on the given policy. Returns True if a row changed."""
+    async with get_db() as db:
+        cur = await db.execute(
+            "UPDATE policies SET active = 0 WHERE policy_id = ? AND active = 1",
+            (policy_id,),
+        )
+        await db.commit()
+        return cur.rowcount > 0
 
 
 async def get_cost_summary() -> dict[str, Any]:

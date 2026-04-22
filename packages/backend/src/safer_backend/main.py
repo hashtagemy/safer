@@ -11,6 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from .ingestion.http import router as http_ingest_router
 from .ingestion.ws import router as ws_ingest_router
 from .inspector.api import router as inspector_router
+from .policy_studio.api import router as policy_studio_router
 from .storage.dao import get_cost_summary, get_stats
 from .storage.db import init_db
 from .ws_broadcaster import broadcaster
@@ -46,6 +47,7 @@ app.add_middleware(
 app.include_router(ws_ingest_router)
 app.include_router(http_ingest_router)
 app.include_router(inspector_router)
+app.include_router(policy_studio_router)
 
 
 @app.get("/health")
