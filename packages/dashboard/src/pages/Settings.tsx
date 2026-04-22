@@ -1,6 +1,9 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
+import { AlertTriangle, CheckCircle2, ShieldAlert, Eye, Ban } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/Card";
-import { fetchJSON } from "@/lib/api";
+import { Badge } from "@/components/ui/Badge";
+import { BACKEND_URL, fetchJSON } from "@/lib/api";
+import { cn } from "@/lib/utils";
 
 interface Stats {
   agents: number;
@@ -16,38 +19,178 @@ interface CostSummary {
   by_component: Record<string, number>;
 }
 
+type GuardMode = "monitor" | "intervene" | "enforce";
+
+interface ConfigSnapshot {
+  guard_mode: GuardMode;
+  valid_guard_modes: GuardMode[];
+}
+
+const GUARD_MODES: Array<{
+  value: GuardMode;
+  label: string;
+  blurb: string;
+  icon: typeof Eye;
+}> = [
+  {
+    value: "monitor",
+    label: "Monitor",
+    blurb: "Log only. Never blocks. Safe to turn on first.",
+    icon: Eye,
+  },
+  {
+    value: "intervene",
+    label: "Intervene",
+    blurb: "Block CRITICAL hits and a short list of high-impact flags.",
+    icon: ShieldAlert,
+  },
+  {
+    value: "enforce",
+    label: "Enforce",
+    blurb: "Block every HIGH-or-worse policy hit.",
+    icon: Ban,
+  },
+];
+
 export default function Settings() {
   const [stats, setStats] = useState<Stats | null>(null);
   const [cost, setCost] = useState<CostSummary | null>(null);
+  const [config, setConfig] = useState<ConfigSnapshot | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [flash, setFlash] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const loadAll = useCallback(async () => {
+    try {
+      const [s, c, cfg] = await Promise.all([
+        fetchJSON<Stats>("/v1/stats"),
+        fetchJSON<CostSummary>("/v1/stats/cost"),
+        fetchJSON<ConfigSnapshot>("/v1/config"),
+      ]);
+      setStats(s);
+      setCost(c);
+      setConfig(cfg);
+      setError(null);
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }, []);
 
   useEffect(() => {
-    const load = async () => {
-      try {
-        const [s, c] = await Promise.all([
-          fetchJSON<Stats>("/v1/stats"),
-          fetchJSON<CostSummary>("/v1/stats/cost"),
-        ]);
-        setStats(s);
-        setCost(c);
-      } catch {
-        /* empty */
+    loadAll();
+    const t = window.setInterval(loadAll, 10_000);
+    return () => clearInterval(t);
+  }, [loadAll]);
+
+  const setGuardMode = async (mode: GuardMode) => {
+    if (!config || config.guard_mode === mode) return;
+    setSaving(true);
+    setError(null);
+    try {
+      const r = await fetch(`${BACKEND_URL}/v1/config`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ guard_mode: mode }),
+      });
+      if (!r.ok) {
+        throw new Error(`${r.status}: ${(await r.text()).slice(0, 200)}`);
       }
-    };
-    load();
-  }, []);
+      const snap = (await r.json()) as ConfigSnapshot;
+      setConfig(snap);
+      setFlash(`Guard mode → ${snap.guard_mode}`);
+      window.setTimeout(() => setFlash(null), 2500);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  };
 
   return (
     <div className="p-6 space-y-6 max-w-3xl">
       <div>
         <h1 className="text-2xl font-semibold tracking-tight">Settings</h1>
         <p className="text-sm text-muted-foreground">
-          System status and configuration.
+          System status, cost, and runtime configuration.
         </p>
       </div>
 
       <Card>
         <CardHeader>
-          <CardTitle>Backend status</CardTitle>
+          <div className="flex items-start justify-between">
+            <div>
+              <CardTitle className="text-base">Guard mode</CardTitle>
+              <p className="text-xs text-muted-foreground font-mono">
+                Controls how the Gateway reacts when a policy hits at runtime.
+                Changes apply immediately to every new event; the SDK learns
+                about them on the next call.
+              </p>
+            </div>
+            {flash && (
+              <div className="flex items-center gap-1 text-xs text-safer-success font-mono">
+                <CheckCircle2 className="h-4 w-4" />
+                {flash}
+              </div>
+            )}
+          </div>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          {config === null && !error && (
+            <p className="text-xs text-muted-foreground font-mono">loading…</p>
+          )}
+          {error && (
+            <div className="flex items-start gap-2 text-xs text-safer-critical font-mono">
+              <AlertTriangle className="h-4 w-4 shrink-0" />
+              <span className="break-all">{error}</span>
+            </div>
+          )}
+          {config && (
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+              {GUARD_MODES.map((m) => {
+                const active = config.guard_mode === m.value;
+                const Icon = m.icon;
+                return (
+                  <button
+                    key={m.value}
+                    onClick={() => setGuardMode(m.value)}
+                    disabled={saving || active}
+                    className={cn(
+                      "text-left rounded-md border p-3 transition",
+                      active
+                        ? "border-safer-ice/60 bg-safer-ice/10 cursor-default"
+                        : "border-border hover:bg-muted/40 cursor-pointer"
+                    )}
+                  >
+                    <div className="flex items-center gap-2">
+                      <Icon
+                        className={cn(
+                          "h-4 w-4",
+                          active ? "text-safer-ice" : "text-muted-foreground"
+                        )}
+                      />
+                      <span className="text-sm font-medium font-mono">
+                        {m.label}
+                      </span>
+                      {active && (
+                        <Badge variant="ice" className="ml-auto">
+                          active
+                        </Badge>
+                      )}
+                    </div>
+                    <p className="mt-1 text-[11px] text-muted-foreground">
+                      {m.blurb}
+                    </p>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Backend status</CardTitle>
         </CardHeader>
         <CardContent>
           {stats ? (
@@ -74,7 +217,7 @@ export default function Settings() {
 
       <Card>
         <CardHeader>
-          <CardTitle>Claude cost</CardTitle>
+          <CardTitle className="text-base">Claude cost</CardTitle>
         </CardHeader>
         <CardContent>
           {cost ? (
@@ -97,19 +240,6 @@ export default function Settings() {
               no cost data yet
             </p>
           )}
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <CardTitle>Guard mode</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <p className="text-sm text-muted-foreground font-mono">
-            Configure via <code>SAFER_GUARD_MODE</code> env var on the SDK side
-            (monitor | intervene | enforce). Per-agent override comes in Phase
-            7.
-          </p>
         </CardContent>
       </Card>
     </div>

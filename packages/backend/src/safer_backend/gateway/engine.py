@@ -58,9 +58,13 @@ _ESCALATION_FLAGS = {
 
 
 def _default_guard_mode() -> GuardMode:
-    m = (os.environ.get("SAFER_GUARD_MODE") or "monitor").lower()
+    """Current guard mode — reads the runtime-mutable config, which is
+    seeded from `SAFER_GUARD_MODE` at startup and can be changed via
+    `PATCH /v1/config`."""
+    from ..runtime_config import get_guard_mode
+
     try:
-        return GuardMode(m)
+        return GuardMode(get_guard_mode())
     except ValueError:
         return GuardMode.MONITOR
 

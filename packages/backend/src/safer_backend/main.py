@@ -13,6 +13,7 @@ from .ingestion.ws import router as ws_ingest_router
 from .inspector.api import router as inspector_router
 from .policy_studio.api import router as policy_studio_router
 from .compliance.api import router as compliance_router
+from .config_api import router as config_router
 from .redteam.api import router as redteam_router
 from .session_report.api import router as session_report_router
 from .sessions_api import router as sessions_router
@@ -56,6 +57,7 @@ app.include_router(session_report_router)
 app.include_router(sessions_router)
 app.include_router(redteam_router)
 app.include_router(compliance_router)
+app.include_router(config_router)
 
 
 @app.get("/health")
