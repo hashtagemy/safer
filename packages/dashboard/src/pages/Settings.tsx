@@ -194,7 +194,7 @@ export default function Settings() {
   };
 
   return (
-    <div className="p-6 space-y-6 max-w-4xl">
+    <div className="p-6 space-y-6">
       <div className="flex items-start justify-between gap-4 flex-wrap">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Settings</h1>
@@ -219,6 +219,7 @@ export default function Settings() {
         </Card>
       )}
 
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
       {/* ---------- Guard mode ---------- */}
       <Card>
         <CardHeader>
@@ -481,8 +482,9 @@ export default function Settings() {
           )}
         </CardContent>
       </Card>
+      </div>
 
-      {/* ---------- System info ---------- */}
+      {/* ---------- System info (full width) ---------- */}
       <Card>
         <CardHeader>
           <CardTitle className="text-base flex items-center gap-2">
@@ -492,39 +494,43 @@ export default function Settings() {
         </CardHeader>
         <CardContent>
           {system ? (
-            <dl className="grid grid-cols-2 gap-x-6 gap-y-2 text-sm font-mono">
-              <dt className="text-muted-foreground">safer version</dt>
-              <dd>{system.safer_version}</dd>
-              <dt className="text-muted-foreground">python</dt>
-              <dd>{system.python_version} · {system.platform}</dd>
-              <dt className="text-muted-foreground">uptime</dt>
-              <dd>{humanUptime(system.uptime_seconds)}</dd>
-              <dt className="text-muted-foreground">db path</dt>
-              <dd className="truncate">{system.db_path}</dd>
-              <dt className="text-muted-foreground">db size</dt>
-              <dd>{humanBytes(system.db_size_bytes)}</dd>
-
-              <dt className="text-muted-foreground pt-2">judge model</dt>
-              <dd className="pt-2">{system.judge_model}</dd>
-              <dt className="text-muted-foreground">haiku model</dt>
-              <dd>{system.haiku_model}</dd>
-              <dt className="text-muted-foreground">policy compiler</dt>
-              <dd>{system.policy_compiler_model}</dd>
-              <dt className="text-muted-foreground">red-team</dt>
-              <dd>{system.redteam_model}</dd>
-
-              <dt className="text-muted-foreground pt-2">opus calls</dt>
-              <dd className="pt-2">{system.total_opus_calls}</dd>
-              <dt className="text-muted-foreground">haiku calls</dt>
-              <dd>{system.total_haiku_calls}</dd>
-              <dt className="text-muted-foreground">cache read ratio</dt>
-              <dd>{(system.cache_read_ratio * 100).toFixed(1)}%</dd>
-              <dt className="text-muted-foreground">tokens in / out</dt>
-              <dd>
-                {system.total_tokens_in.toLocaleString()} /{" "}
-                {system.total_tokens_out.toLocaleString()}
-              </dd>
-            </dl>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-x-8 gap-y-4 text-sm font-mono">
+              <dl className="space-y-1.5">
+                <div className="text-[11px] uppercase tracking-wide text-muted-foreground mb-2">
+                  runtime
+                </div>
+                <Row k="safer version" v={system.safer_version} />
+                <Row k="python" v={`${system.python_version} · ${system.platform}`} />
+                <Row k="uptime" v={humanUptime(system.uptime_seconds)} />
+                <Row k="db path" v={system.db_path} truncate />
+                <Row k="db size" v={humanBytes(system.db_size_bytes)} />
+              </dl>
+              <dl className="space-y-1.5">
+                <div className="text-[11px] uppercase tracking-wide text-muted-foreground mb-2">
+                  models
+                </div>
+                <Row k="judge" v={system.judge_model} />
+                <Row k="haiku" v={system.haiku_model} />
+                <Row k="policy compiler" v={system.policy_compiler_model} />
+                <Row k="red-team" v={system.redteam_model} />
+              </dl>
+              <dl className="space-y-1.5">
+                <div className="text-[11px] uppercase tracking-wide text-muted-foreground mb-2">
+                  claude usage
+                </div>
+                <Row k="opus calls" v={String(system.total_opus_calls)} />
+                <Row k="haiku calls" v={String(system.total_haiku_calls)} />
+                <Row
+                  k="cache read ratio"
+                  v={`${(system.cache_read_ratio * 100).toFixed(1)}%`}
+                  emphasize={system.cache_read_ratio > 0.4}
+                />
+                <Row
+                  k="tokens in / out"
+                  v={`${system.total_tokens_in.toLocaleString()} / ${system.total_tokens_out.toLocaleString()}`}
+                />
+              </dl>
+            </div>
           ) : (
             <p className="text-sm text-muted-foreground font-mono">
               system info unavailable
@@ -532,6 +538,34 @@ export default function Settings() {
           )}
         </CardContent>
       </Card>
+    </div>
+  );
+}
+
+function Row({
+  k,
+  v,
+  truncate,
+  emphasize,
+}: {
+  k: string;
+  v: string;
+  truncate?: boolean;
+  emphasize?: boolean;
+}) {
+  return (
+    <div className="flex items-start gap-3">
+      <dt className="text-muted-foreground w-28 shrink-0">{k}</dt>
+      <dd
+        className={cn(
+          "flex-1",
+          truncate && "truncate",
+          emphasize && "text-safer-ice"
+        )}
+        title={v}
+      >
+        {v}
+      </dd>
     </div>
   );
 }
