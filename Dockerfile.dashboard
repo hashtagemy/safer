@@ -1,17 +1,19 @@
-# SAFER dashboard — Vite + React + bun
-FROM oven/bun:1-alpine
+# SAFER dashboard — Vite + React (npm or bun)
+FROM node:20-alpine
 
 WORKDIR /app
 
+# Copy manifest first for better Docker layer caching.
 COPY package.json ./
-COPY packages/dashboard/package.json packages/dashboard/package.json
+COPY packages/dashboard/package.json packages/dashboard/
 
-RUN bun install --frozen-lockfile || bun install
+RUN cd packages/dashboard && npm install
 
+# Copy source.
 COPY packages/dashboard packages/dashboard
 
 EXPOSE 5173
 
 WORKDIR /app/packages/dashboard
 
-CMD ["bun", "run", "dev", "--host", "0.0.0.0"]
+CMD ["npm", "run", "dev", "--", "--host", "0.0.0.0"]

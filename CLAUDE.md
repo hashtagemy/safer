@@ -40,8 +40,9 @@ roadmap/      — plan + phases
 | Install backend + SDK deps | `uv sync` |
 | Run backend tests | `uv run pytest packages/backend packages/sdk` |
 | Run backend dev | `uv run uvicorn safer_backend.main:app --reload` |
-| Install dashboard deps | `cd packages/dashboard && bun install` |
-| Run dashboard dev | `cd packages/dashboard && bun run dev` |
+| Install dashboard deps | `cd packages/dashboard && npm install` (or `bun install` if you have it) |
+| Run dashboard dev | `cd packages/dashboard && npm run dev` |
+| Build dashboard | `cd packages/dashboard && npm run build` |
 | Run everything (Docker) | `docker compose up` |
 
 ## Model routing (hard rules)
