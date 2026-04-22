@@ -1,0 +1,11 @@
+{
+  "name": "@safer/dashboard",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "echo 'Dashboard init coming in Phase 5 (run: bun create vite . -- --template react-ts)' && sleep 2",
+    "build": "echo 'Build coming in Phase 5'",
+    "preview": "echo 'Preview coming in Phase 5'"
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "name": "safer-monorepo",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": [
+    "packages/dashboard"
+  ],
+  "scripts": {
+    "dev": "cd packages/dashboard && bun run dev",
+    "build": "cd packages/dashboard && bun run build"
+  }
+}

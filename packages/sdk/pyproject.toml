@@ -1,0 +1,28 @@
+[project]
+name = "safer-sdk"
+version = "0.1.0"
+description = "SAFER SDK — instrument any AI agent framework with one line"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "Apache-2.0"
+authors = [{ name = "SAFER Contributors" }]
+dependencies = [
+    "pydantic>=2.5",
+    "httpx>=0.27",
+    "websockets>=12.0",
+    "anyio>=4.3",
+]
+
+[project.optional-dependencies]
+claude = ["anthropic>=0.40"]
+langchain = ["langchain>=0.2", "langchain-core>=0.2"]
+openai = ["openai>=1.40"]
+all = ["anthropic>=0.40", "langchain>=0.2", "langchain-core>=0.2", "openai>=1.40"]
+dev = ["pytest>=8.0", "pytest-asyncio>=0.23", "ruff>=0.5"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/safer"]

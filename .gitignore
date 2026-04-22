@@ -1,0 +1,70 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+env/
+.eggs/
+*.egg-info/
+*.egg
+dist/
+build/
+pip-wheel-metadata/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# uv
+.uv/
+
+# Node / Bun
+node_modules/
+bun.lockb
+.next/
+out/
+.turbo/
+
+# Vite / Dashboard
+packages/dashboard/dist/
+packages/dashboard/.vite/
+
+# Env / secrets
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+
+# Database
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+safer.db*
+
+# Logs
+*.log
+logs/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Demo artifacts
+docs/demo-assets/*.mp4
+!docs/demo-assets/.gitkeep
+
+# Misc
+.cache/
+tmp/

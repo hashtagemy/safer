@@ -1,0 +1,17 @@
+# SAFER dashboard — Vite + React + bun
+FROM oven/bun:1-alpine
+
+WORKDIR /app
+
+COPY package.json ./
+COPY packages/dashboard/package.json packages/dashboard/package.json
+
+RUN bun install --frozen-lockfile || bun install
+
+COPY packages/dashboard packages/dashboard
+
+EXPOSE 5173
+
+WORKDIR /app/packages/dashboard
+
+CMD ["bun", "run", "dev", "--host", "0.0.0.0"]

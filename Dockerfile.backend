@@ -1,0 +1,31 @@
+# SAFER backend — FastAPI + uv
+FROM python:3.11-slim
+
+# uv installer
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    build-essential \
+    libpango-1.0-0 \
+    libpangoft2-1.0-0 \
+    libffi-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+
+WORKDIR /app
+
+# Copy workspace manifests first (cache layer)
+COPY pyproject.toml ./
+COPY packages/sdk/pyproject.toml packages/sdk/pyproject.toml
+COPY packages/backend/pyproject.toml packages/backend/pyproject.toml
+
+# Copy source
+COPY packages/sdk/src packages/sdk/src
+COPY packages/backend/src packages/backend/src
+
+# Install
+RUN uv sync --frozen --no-dev || uv sync --no-dev
+
+EXPOSE 8000
+
+CMD ["uv", "run", "uvicorn", "safer_backend.main:app", "--host", "0.0.0.0", "--port", "8000"]
