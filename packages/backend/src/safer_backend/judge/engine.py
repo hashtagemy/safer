@@ -86,11 +86,6 @@ def _extract_json(text: str) -> dict[str, Any]:
     return json.loads(m.group(0))
 
 
-def _mock_client() -> Any:
-    """Used by tests when ANTHROPIC_API_KEY is absent."""
-    return None
-
-
 _client_singleton: Any = None
 
 
