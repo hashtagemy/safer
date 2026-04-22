@@ -1,8 +1,9 @@
 """Event router — decides which downstream components process each event.
 
 Phase 3: persist + broadcast.
-Phase 6: adds Judge dispatch with dynamic persona routing. Gateway + Haiku
-pre-filter land in Phase 7.
+Phase 6: adds Judge dispatch with dynamic persona routing.
+Phase 7: adds Gateway (deterministic pre-call) + Haiku per-step + block
+broadcast to SDK.
 """
 
 from __future__ import annotations
@@ -11,13 +12,22 @@ import asyncio
 import json
 import logging
 import os
+from collections import defaultdict, deque
+from typing import Deque
 
-from safer.events import Event
+from safer.events import Event, Hook, RiskHint
 
+from ..gateway import GuardMode, pre_call_check
 from ..storage.dao import insert_event
 from ..storage.db import get_db
 from ..ws_broadcaster import broadcaster
+from .haiku_prestep import score_step
 from .persona_router import is_judge_eligible, select_personas_runtime
+
+# Small rolling log of recent tool calls per session, for loop detection.
+_RECENT_TOOL_CALLS: dict[str, Deque[dict[str, object]]] = defaultdict(
+    lambda: deque(maxlen=10)
+)
 
 log = logging.getLogger("safer.router")
 
@@ -44,26 +54,117 @@ async def route_event(event: Event) -> None:
         log.exception("failed to persist event %s: %s", event.event_id, e)
         return
 
-    # 2. Broadcast to dashboard subscribers
-    await broadcaster.broadcast(
-        {
-            "type": "event",
-            "event_id": event.event_id,
-            "session_id": event.session_id,
-            "agent_id": event.agent_id,
-            "hook": event.hook.value,
-            "sequence": event.sequence,
-            "timestamp": event.timestamp.isoformat(),
-            "risk_hint": event.risk_hint.value,
-            "payload": event.model_dump(mode="json"),
-        }
-    )
+    event_payload = event.model_dump(mode="json")
 
-    # 3. Judge dispatch — only on the 3 eligible hooks, and only if active.
+    # 2. Track recent tool calls for loop detection.
+    if event.hook == Hook.BEFORE_TOOL_USE:
+        _RECENT_TOOL_CALLS[event.session_id].append(
+            {"tool_name": event_payload.get("tool_name"), "args": event_payload.get("args")}
+        )
+
+    # 3. Gateway pre-call — deterministic, cheap, fast.
+    gateway_decision = None
+    if event.hook in (Hook.BEFORE_TOOL_USE, Hook.BEFORE_LLM_CALL, Hook.ON_FINAL_OUTPUT):
+        event_for_policy = dict(event_payload)
+        # Inject recent history for loop_detection rules.
+        event_for_policy["__recent_tool_calls__"] = list(
+            _RECENT_TOOL_CALLS.get(event.session_id, deque())
+        )
+        try:
+            gateway_decision = await pre_call_check(
+                event_for_policy, agent_id=event.agent_id
+            )
+        except Exception as e:
+            log.warning("gateway check failed (soft-fail): %s", e)
+            gateway_decision = None
+
+        # If Gateway raised an elevated risk, upgrade the event's risk_hint
+        # so the Judge router picks a broader persona set.
+        if gateway_decision and gateway_decision.risk != "LOW":
+            try:
+                event = event.model_copy(update={"risk_hint": RiskHint(gateway_decision.risk)})
+            except Exception:  # pragma: no cover
+                pass
+
+    # 4. Broadcast to dashboard subscribers (include gateway decision).
+    broadcast_msg = {
+        "type": "event",
+        "event_id": event.event_id,
+        "session_id": event.session_id,
+        "agent_id": event.agent_id,
+        "hook": event.hook.value,
+        "sequence": event.sequence,
+        "timestamp": event.timestamp.isoformat(),
+        "risk_hint": event.risk_hint.value,
+        "payload": event_payload,
+    }
+    if gateway_decision is not None:
+        broadcast_msg["gateway"] = {
+            "decision": gateway_decision.decision,
+            "risk": gateway_decision.risk,
+            "reason": gateway_decision.reason,
+            "hits": [
+                {
+                    "policy_id": h.policy_id,
+                    "policy_name": h.policy_name,
+                    "severity": h.severity,
+                    "flag": h.flag,
+                    "evidence": h.evidence,
+                }
+                for h in gateway_decision.hits
+            ],
+        }
+    await broadcaster.broadcast(broadcast_msg)
+
+    # 5. Gateway block → emit block signal immediately (SDK raises SaferBlocked).
+    if gateway_decision and gateway_decision.is_block:
+        await broadcaster.broadcast(
+            {
+                "type": "block",
+                "event_id": event.event_id,
+                "session_id": event.session_id,
+                "agent_id": event.agent_id,
+                "source": "gateway",
+                "reason": gateway_decision.reason,
+                "risk": gateway_decision.risk,
+                "hits": [
+                    {"policy_id": h.policy_id, "flag": h.flag}
+                    for h in gateway_decision.hits
+                ],
+            }
+        )
+
+    # 6. Per-step Haiku scoring — decision hooks only, fire-and-forget.
+    if event.hook in (Hook.BEFORE_LLM_CALL, Hook.BEFORE_TOOL_USE, Hook.ON_AGENT_DECISION):
+        asyncio.create_task(_run_haiku(event))
+
+    # 7. Judge dispatch — only on the 3 eligible hooks, and only if active.
     if _judge_active() and is_judge_eligible(event.hook):
         personas = select_personas_runtime(event.hook, event.risk_hint)
         if personas:
             asyncio.create_task(_run_judge(event, [p.value for p in personas]))
+
+
+async def _run_haiku(event: Event) -> None:
+    """Background Haiku per-step scoring. Never blocks ingestion."""
+    try:
+        score = await score_step(event.model_dump(mode="json"))
+    except Exception as e:  # pragma: no cover
+        log.debug("haiku pre-step failed: %s", e)
+        return
+    if score.relevance_score >= 100 and not score.should_escalate:
+        return  # nothing interesting to broadcast
+    await broadcaster.broadcast(
+        {
+            "type": "prestep_score",
+            "event_id": event.event_id,
+            "session_id": event.session_id,
+            "agent_id": event.agent_id,
+            "relevance_score": score.relevance_score,
+            "should_escalate": score.should_escalate,
+            "reason": score.reason,
+        }
+    )
 
 
 async def _run_judge(event: Event, active_personas: list[str]) -> None:
