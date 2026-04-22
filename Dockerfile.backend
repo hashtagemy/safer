@@ -21,9 +21,13 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
 WORKDIR /app
 
+# Top-level README — referenced implicitly via the workspace members'
+# hatchling metadata; copy before syncing so build_editable sees it.
+COPY README.md ./
+
 # Workspace manifests + lock file first (better Docker cache hit-rate).
 COPY pyproject.toml uv.lock ./
-COPY packages/sdk/pyproject.toml packages/sdk/pyproject.toml
+COPY packages/sdk/pyproject.toml packages/sdk/README.md packages/sdk/
 COPY packages/backend/pyproject.toml packages/backend/pyproject.toml
 
 # Source next — templates/ and schema.sql travel with the package.
