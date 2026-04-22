@@ -223,7 +223,7 @@ export default function Settings() {
       <Card>
         <CardHeader>
           <CardTitle className="text-base flex items-center gap-2">
-            <ShieldAlert className="h-4 w-4" />
+            <ShieldAlert className="h-4 w-4 text-safer-ice" />
             Gateway guard mode
           </CardTitle>
           <p className="text-xs text-muted-foreground font-mono">
@@ -271,7 +271,7 @@ export default function Settings() {
       <Card>
         <CardHeader>
           <CardTitle className="text-base flex items-center gap-2">
-            <Sparkles className="h-4 w-4" />
+            <Sparkles className="h-4 w-4 text-safer-ice" />
             Multi-Persona Judge
           </CardTitle>
           <p className="text-xs text-muted-foreground font-mono">
@@ -323,7 +323,7 @@ export default function Settings() {
       <Card>
         <CardHeader>
           <CardTitle className="text-base flex items-center gap-2">
-            <Swords className="h-4 w-4" />
+            <Swords className="h-4 w-4 text-safer-ice" />
             Red-Team defaults
           </CardTitle>
           <p className="text-xs text-muted-foreground font-mono">
@@ -385,7 +385,7 @@ export default function Settings() {
       <Card>
         <CardHeader>
           <CardTitle className="text-base flex items-center gap-2">
-            <Database className="h-4 w-4" />
+            <Database className="h-4 w-4 text-safer-ice" />
             Data management
           </CardTitle>
           <p className="text-xs text-muted-foreground font-mono">
@@ -486,7 +486,7 @@ export default function Settings() {
       <Card>
         <CardHeader>
           <CardTitle className="text-base flex items-center gap-2">
-            <Cpu className="h-4 w-4" />
+            <Cpu className="h-4 w-4 text-safer-ice" />
             System
           </CardTitle>
         </CardHeader>

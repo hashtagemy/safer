@@ -232,7 +232,7 @@ function InputColumn({
     <Card className="h-full">
       <CardHeader>
         <CardTitle className="text-base flex items-center gap-2">
-          <Microscope className="h-4 w-4" />
+          <Microscope className="h-4 w-4 text-safer-ice" />
           Inspect agent
         </CardTitle>
         <p className="text-xs text-muted-foreground font-mono">
@@ -381,7 +381,7 @@ function ASTCard({ summary }: { summary: ASTSummary }) {
     <Card>
       <CardHeader>
         <CardTitle className="text-base flex items-center gap-2">
-          <FileCode className="h-4 w-4" />
+          <FileCode className="h-4 w-4 text-safer-ice" />
           AST summary
         </CardTitle>
       </CardHeader>

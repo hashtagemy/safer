@@ -4,27 +4,29 @@
 
 @layer base {
   :root {
-    --background: 222 47% 8%;
-    --foreground: 210 40% 96%;
+    /* Dark-first palette. Each raw value tuned for WCAG AA contrast
+       against the #0B1220 app background while staying easy on the eyes. */
+    --background: 222 47% 7%;
+    --foreground: 210 40% 97%;
 
-    --card: 217 33% 14%;
-    --card-foreground: 210 40% 96%;
+    --card: 217 30% 13%;
+    --card-foreground: 210 40% 97%;
 
-    --muted: 217 33% 18%;
-    --muted-foreground: 215 16% 62%;
+    --muted: 217 30% 18%;
+    --muted-foreground: 215 22% 72%;
 
-    --accent: 217 33% 20%;
-    --accent-foreground: 210 40% 96%;
+    --accent: 217 30% 22%;
+    --accent-foreground: 210 40% 97%;
 
-    --border: 217 33% 20%;
-    --input: 217 33% 18%;
-    --ring: 199 89% 73%;
+    --border: 217 28% 28%;
+    --input: 217 30% 20%;
+    --ring: 199 90% 74%;
 
     --primary: 199 95% 74%;
     --primary-foreground: 222 47% 8%;
 
-    --secondary: 217 33% 18%;
-    --secondary-foreground: 210 40% 96%;
+    --secondary: 217 30% 20%;
+    --secondary-foreground: 210 40% 97%;
 
     --destructive: 0 84% 60%;
     --destructive-foreground: 0 0% 98%;
@@ -37,7 +39,7 @@
   }
 
   body {
-    @apply bg-background text-foreground font-sans;
+    @apply bg-background text-foreground font-sans antialiased;
     font-feature-settings: "tnum";
     min-height: 100vh;
   }
@@ -45,9 +47,30 @@
   code, pre, .mono {
     @apply font-mono;
   }
+
+  /* Selection — subtle buz mavisi accent. */
+  ::selection {
+    background: rgba(125, 211, 252, 0.28);
+    color: #f1f5f9;
+  }
+
+  /* Sharper focus ring for every interactive control. */
+  :focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 2px rgba(125, 211, 252, 0.45);
+    border-radius: 6px;
+  }
 }
 
-/* Scrollbar — subtle for dark theme */
+@layer components {
+  /* Cards lift slightly on hover when they are interactive (buttons,
+     NavLinks). Non-interactive cards inherit the base border unchanged. */
+  .card-interactive {
+    @apply transition-colors duration-200 border-border hover:border-safer-ice/40;
+  }
+}
+
+/* Scrollbar — subtle, track invisible, thumb slightly warmer than border. */
 ::-webkit-scrollbar { width: 8px; height: 8px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: hsl(var(--border)); border-radius: 4px; }

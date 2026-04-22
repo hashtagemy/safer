@@ -244,7 +244,7 @@ export default function Reports() {
           <CardHeader>
             <div className="flex items-center justify-between">
               <CardTitle className="text-base flex items-center gap-2">
-                <FileText className="h-4 w-4" />
+                <FileText className="h-4 w-4 text-safer-ice" />
                 HTML preview
               </CardTitle>
               <div className="flex items-center gap-2">
@@ -280,7 +280,7 @@ export default function Reports() {
         <Card>
           <CardHeader>
             <CardTitle className="text-base flex items-center gap-2">
-              <FileJson className="h-4 w-4" />
+              <FileJson className="h-4 w-4 text-safer-ice" />
               JSON preview
             </CardTitle>
           </CardHeader>
