@@ -1,0 +1,98 @@
+{% extends "_base.html.jinja" %}
+
+{% block content %}
+
+<h2>SOC 2 — Trust Services Criteria</h2>
+<p class="muted">
+  SOC 2 aligns findings to the Trust Services Criteria. Below:
+  control failures surfaced by the Multi-Persona Judge, access control
+  events from the Gateway, and an audit trail summary.
+</p>
+
+<h3>Findings by severity</h3>
+<div class="grid grid-4">
+  {% set sev = data.findings_by_severity %}
+  <div class="kpi"><div class="label">Low</div><div class="value">{{ sev.get("LOW", 0) }}</div></div>
+  <div class="kpi"><div class="label">Medium</div><div class="value">{{ sev.get("MEDIUM", 0) }}</div></div>
+  <div class="kpi"><div class="label">High</div><div class="value">{{ sev.get("HIGH", 0) }}</div></div>
+  <div class="kpi"><div class="label">Critical</div><div class="value">{{ sev.get("CRITICAL", 0) }}</div></div>
+</div>
+
+<h3>Control failures (CC6 — logical access, CC7 — system operations)</h3>
+<table>
+  <thead>
+    <tr><th>Criterion</th><th>Flag</th><th>Count</th></tr>
+  </thead>
+  <tbody>
+    {% set soc2_rows = [
+      ("CC6.1 — Logical access",   ["soc2_cc6_failed", "unauthorized_tool_call", "tool_abuse"]),
+      ("CC6.6 — External access",  ["pii_sent_external", "data_exfiltration", "ssl_bypass"]),
+      ("CC7.1 — System monitoring",["audit_trail_gap", "loop_detected", "excessive_retries"]),
+      ("CC7.2 — Anomalies",        ["off_task", "scope_creep", "tool_misuse"]),
+      ("CC7.3 — Incident response",["soc2_cc7_failed"]),
+    ] %}
+    {% for label, flags in soc2_rows %}
+      {% for flag in flags %}
+        <tr>
+          <td>{{ label }}</td>
+          <td class="mono">{{ flag }}</td>
+          <td>{{ data.flags_by_count.get(flag, 0) }}</td>
+        </tr>
+      {% endfor %}
+    {% endfor %}
+  </tbody>
+</table>
+
+<h3>Audit trail — runtime verdicts</h3>
+<p class="muted">
+  Every critical step is adjudicated by the Multi-Persona Judge. This
+  section lists every HIGH / CRITICAL verdict in range.
+</p>
+{% set critical_verdicts = data.verdicts | selectattr("overall_risk", "in", ["HIGH", "CRITICAL"]) | list %}
+{% if critical_verdicts %}
+<table>
+  <thead>
+    <tr><th>Timestamp</th><th>Agent</th><th>Session</th><th>Risk</th><th>Block</th><th>Flags</th></tr>
+  </thead>
+  <tbody>
+    {% for v in critical_verdicts[:40] %}
+    <tr>
+      <td class="small">{{ v.timestamp[:19] }}</td>
+      <td class="mono small">{{ v.agent_id }}</td>
+      <td class="mono small">{{ v.session_id }}</td>
+      <td><span class="pill pill-{{ v.overall_risk|lower }}">{{ v.overall_risk }}</span></td>
+      <td class="small">{{ "yes" if v.overall_block else "no" }}</td>
+      <td class="mono small">{{ v.flags|join(", ") }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% if critical_verdicts|length > 40 %}
+  <p class="muted small">Truncated to the first 40 verdicts.</p>
+{% endif %}
+{% else %}
+<p class="muted">No HIGH or CRITICAL verdicts in range. ✔️</p>
+{% endif %}
+
+<h3>Top findings (severity first)</h3>
+{% if data.findings %}
+<table>
+  <thead>
+    <tr><th>Sev</th><th>Category</th><th>Flag</th><th>Title</th><th>Source</th></tr>
+  </thead>
+  <tbody>
+    {% for f in data.findings[:20] %}
+    <tr>
+      <td><span class="pill pill-{{ f.severity|lower }}">{{ f.severity }}</span></td>
+      <td class="small">{{ f.category }}</td>
+      <td class="mono small">{{ f.flag }}</td>
+      <td>{{ f.title }}</td>
+      <td class="small">{{ f.source }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="muted">No findings in range.</p>
+{% endif %}
+{% endblock %}

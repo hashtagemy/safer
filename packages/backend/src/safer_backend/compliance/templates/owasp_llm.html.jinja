@@ -1,0 +1,79 @@
+{% extends "_base.html.jinja" %}
+
+{% block content %}
+
+<h2>OWASP LLM Top 10 (2025 edition)</h2>
+<p class="muted">
+  Each row counts how many findings or runtime flags in this range map
+  to the OWASP category. Counts come from both directly emitted OWASP
+  flags and the deterministic flag → category mapping SAFER applies at
+  aggregation time.
+</p>
+
+<table>
+  <thead>
+    <tr><th style="width:58pt;">ID</th><th>Category</th><th style="width:60pt;">Count</th></tr>
+  </thead>
+  <tbody>
+    {% for key, label, name in owasp_rows %}
+    {% set count = data.owasp_counts.get(key, 0) %}
+    <tr>
+      <td class="mono">{{ label }}</td>
+      <td>{{ name }}</td>
+      <td>
+        {% if count == 0 %}
+          <span class="pill pill-low">{{ count }}</span>
+        {% elif count < 3 %}
+          <span class="pill pill-medium">{{ count }}</span>
+        {% elif count < 8 %}
+          <span class="pill pill-high">{{ count }}</span>
+        {% else %}
+          <span class="pill pill-critical">{{ count }}</span>
+        {% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+
+<h3>Samples by category</h3>
+{% set owasp_findings = data.findings | selectattr("owasp_id", "defined") | list %}
+{% if owasp_findings %}
+{% for key, label, name in owasp_rows %}
+  {% set matches = data.findings | selectattr("owasp_id", "equalto", key) | list %}
+  {% if matches %}
+  <h3>{{ label }} — {{ name }}</h3>
+  <table>
+    <thead>
+      <tr><th>Sev</th><th>Flag</th><th>Title</th><th>Description</th></tr>
+    </thead>
+    <tbody>
+      {% for f in matches[:6] %}
+      <tr>
+        <td><span class="pill pill-{{ f.severity|lower }}">{{ f.severity }}</span></td>
+        <td class="mono small">{{ f.flag }}</td>
+        <td>{{ f.title }}</td>
+        <td class="small">{{ f.description[:160] }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+{% endfor %}
+{% else %}
+<p class="muted">No findings with explicit OWASP IDs in range. The counts
+above still reflect flag-to-OWASP derivation.</p>
+{% endif %}
+
+<h3>Suggested mitigations</h3>
+<ul>
+  <li><b>LLM01 Prompt Injection</b> — enable the Prompt Injection Guard built-in policy; treat fetched content as untrusted.</li>
+  <li><b>LLM02 Insecure Output Handling</b> — refuse eval/exec/pickle paths; escape tool outputs when feeding back to the model.</li>
+  <li><b>LLM04 Model DoS</b> — enable the Loop Detection built-in policy; cap tool retries per session.</li>
+  <li><b>LLM06 Sensitive Info Disclosure</b> — Gateway PII guard + pii-egress-block policy from Policy Studio.</li>
+  <li><b>LLM07 Insecure Plugin Design</b> — use the Tool Allowlist built-in policy; verify argv/shape on each tool.</li>
+  <li><b>LLM08 Excessive Agency</b> — compile scope-guard Policy Studio rules; bring Scope Enforcer in on every decision hook.</li>
+  <li><b>LLM09 Overreliance</b> — keep Trust Guardian active on final output; refuse unsupported claims.</li>
+  <li><b>LLM10 Model Theft</b> — compile system-prompt-confidentiality policy; refuse extraction framings.</li>
+</ul>
+{% endblock %}

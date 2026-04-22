@@ -1,0 +1,104 @@
+{% extends "_base.html.jinja" %}
+
+{% block content %}
+
+<h2>GDPR — Data Protection Posture</h2>
+<p class="muted">
+  This section summarises personal-data exposure and compliance signals
+  across agent activity in range. Each finding is evidence-backed by a
+  quote from an ingested event.
+</p>
+
+<h3>Compliance flag counts</h3>
+<table>
+  <thead>
+    <tr><th>Article</th><th>Flag</th><th>Count</th></tr>
+  </thead>
+  <tbody>
+    {% set articles = [
+      ("Art. 5 — Principles",    ["gdpr_art5_violation"]),
+      ("Art. 6 — Lawful basis",  ["gdpr_art6_violation", "consent_missing"]),
+      ("Art. 32 — Security",     ["gdpr_art32_violation", "pii_stored_insecure", "pii_logged"]),
+      ("PII — Exposure / egress",["pii_exposure", "pii_sent_external"]),
+      ("Cross-tenant",           ["cross_tenant_data"]),
+      ("Retention / residency",  ["retention_violation", "data_residency_violation"]),
+      ("Audit trail",            ["audit_trail_gap"]),
+    ] %}
+    {% for label, flags in articles %}
+      {% for flag in flags %}
+        <tr>
+          <td>{{ label }}</td>
+          <td class="mono">{{ flag }}</td>
+          <td>{{ data.flags_by_count.get(flag, 0) }}</td>
+        </tr>
+      {% endfor %}
+    {% endfor %}
+  </tbody>
+</table>
+
+<h3>Personal-data findings</h3>
+{% set pii_findings = data.findings
+    | selectattr("category", "equalto", "COMPLIANCE") | list %}
+{% if pii_findings %}
+<table>
+  <thead>
+    <tr>
+      <th>Severity</th><th>Flag</th><th>Agent</th><th>Session</th><th>Created</th><th>Title</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for f in pii_findings[:40] %}
+    <tr>
+      <td><span class="pill pill-{{ f.severity|lower }}">{{ f.severity }}</span></td>
+      <td class="mono">{{ f.flag }}</td>
+      <td class="mono small">{{ f.agent_id }}</td>
+      <td class="mono small">{{ f.session_id or "—" }}</td>
+      <td class="small">{{ f.created_at[:10] }}</td>
+      <td>{{ f.title }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% if pii_findings|length > 40 %}
+  <p class="muted small">Truncated to the first 40 findings. Full list in the JSON export.</p>
+{% endif %}
+{% else %}
+<p class="muted">No COMPLIANCE-category findings in this range. ✔️</p>
+{% endif %}
+
+<h3>Gateway decisions (blocks)</h3>
+{% if data.gateway_blocks %}
+<table>
+  <thead>
+    <tr><th>Timestamp</th><th>Agent</th><th>Session</th><th>Flags</th></tr>
+  </thead>
+  <tbody>
+    {% for b in data.gateway_blocks[:30] %}
+    <tr>
+      <td class="small">{{ b.timestamp[:19] }}</td>
+      <td class="mono small">{{ b.agent_id }}</td>
+      <td class="mono small">{{ b.session_id }}</td>
+      <td class="mono small">{{ b.flags|join(", ") }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="muted">No blocks recorded in range.</p>
+{% endif %}
+
+<h3>Agents covered</h3>
+<table>
+  <thead><tr><th>Agent id</th><th>Name</th><th>Framework</th><th>Last seen</th></tr></thead>
+  <tbody>
+    {% for a in data.agents %}
+    <tr>
+      <td class="mono small">{{ a.agent_id }}</td>
+      <td>{{ a.name }}</td>
+      <td class="small">{{ a.framework or "—" }}</td>
+      <td class="small">{{ (a.last_seen or a.first_seen)[:19] }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}
