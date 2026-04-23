@@ -71,4 +71,5 @@ def test_parse_event_discriminates_by_hook():
 
 def test_hook_enum_matches_payload_map():
     assert set(HOOK_TO_PAYLOAD.keys()) == set(Hook)
-    assert len(HOOK_TO_PAYLOAD) == 9
+    # 1 onboarding (on_agent_register) + 9 runtime hooks.
+    assert len(HOOK_TO_PAYLOAD) == 10

@@ -27,6 +27,7 @@ from .events import (
     Event,
     Hook,
     OnAgentDecisionPayload,
+    OnAgentRegisterPayload,
     OnErrorPayload,
     OnFinalOutputPayload,
     OnSessionEndPayload,
@@ -50,6 +51,7 @@ __all__ = [
     "SaferBlocked",
     "get_client",
     # Event payload classes (useful for type hints in user code)
+    "OnAgentRegisterPayload",
     "OnSessionStartPayload",
     "BeforeLLMCallPayload",
     "AfterLLMCallPayload",
@@ -70,7 +72,7 @@ def track_event(
 ) -> None:
     """Emit a lifecycle event manually. Use this if no bundled adapter fits.
 
-    `hook` must be one of the 9 Hook enum values.
+    `hook` must be one of the Hook enum values.
     `payload` should include hook-specific fields (see `safer.events`).
     If `session_id` / `agent_id` are omitted, sensible defaults are used.
     """

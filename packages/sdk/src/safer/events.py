@@ -17,8 +17,14 @@ from pydantic import BaseModel, Field
 
 
 class Hook(str, Enum):
-    """9 lifecycle hook points. See CLAUDE.md persona routing rules."""
+    """10 lifecycle hook points — 1 onboarding + 9 runtime.
 
+    See CLAUDE.md persona routing rules. ON_AGENT_REGISTER fires once per
+    process when `instrument()` runs; it is not dispatched to the runtime
+    Judge (onboarding-phase only, consumed by the Agent Registry).
+    """
+
+    ON_AGENT_REGISTER = "on_agent_register"
     ON_SESSION_START = "on_session_start"
     BEFORE_LLM_CALL = "before_llm_call"
     AFTER_LLM_CALL = "after_llm_call"
@@ -65,7 +71,31 @@ class EventBase(BaseModel):
     )
 
 
-# ---------- 9 payload subtypes ----------
+# ---------- 10 payload subtypes ----------
+
+
+class OnAgentRegisterPayload(EventBase):
+    """One-shot onboarding event emitted by `instrument()`.
+
+    Carries a gzip+base64 snapshot of the agent's Python source tree so
+    the backend can run a project-wide Inspector scan on demand. The
+    snapshot hash lets the backend skip re-ingestion when nothing
+    changed between runs.
+    """
+
+    hook: Literal[Hook.ON_AGENT_REGISTER] = Hook.ON_AGENT_REGISTER
+    agent_name: str
+    agent_version: str | None = None
+    framework: str = "custom"
+    system_prompt: str | None = None
+    project_root: str
+    code_snapshot_b64: str = Field(
+        description="gzip(JSON({file_path: source, ...})) encoded as base64"
+    )
+    code_snapshot_hash: str = Field(description="SHA256 of the uncompressed JSON")
+    file_count: int = 0
+    total_bytes: int = 0
+    registered_at: datetime = Field(default_factory=_utcnow)
 
 
 class OnSessionStartPayload(EventBase):
@@ -139,6 +169,7 @@ class OnErrorPayload(EventBase):
 
 
 Event = Union[
+    OnAgentRegisterPayload,
     OnSessionStartPayload,
     BeforeLLMCallPayload,
     AfterLLMCallPayload,
@@ -152,6 +183,7 @@ Event = Union[
 
 
 HOOK_TO_PAYLOAD: dict[Hook, type[EventBase]] = {
+    Hook.ON_AGENT_REGISTER: OnAgentRegisterPayload,
     Hook.ON_SESSION_START: OnSessionStartPayload,
     Hook.BEFORE_LLM_CALL: BeforeLLMCallPayload,
     Hook.AFTER_LLM_CALL: AfterLLMCallPayload,

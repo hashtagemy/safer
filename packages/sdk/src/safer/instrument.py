@@ -3,18 +3,34 @@
 Detects installed frameworks (Claude Agent SDK, LangChain, ...) and
 registers the appropriate adapter. Users who use vanilla Python can
 still emit events via `safer.track_event()`.
+
+On the first successful call in a process, `instrument()` also emits a
+single `on_agent_register` event carrying a gzip+base64 snapshot of the
+agent's Python source tree. This is what lets the backend populate the
+Agents dashboard automatically — no paste-source step required.
 """
 
 from __future__ import annotations
 
 import atexit
+import inspect
 import logging
+import threading
 from typing import Any
 
 from .client import SaferClient, clear_client, get_client, set_client
 from .config import SaferConfig
+from .events import Hook, OnAgentRegisterPayload
+from .snapshot import SnapshotResult, build_snapshot
 
 log = logging.getLogger("safer")
+
+_DEFAULT_AGENT_ID = "agent_default"
+
+# Remembers whether we've already emitted on_agent_register in this
+# process so repeated calls to instrument() stay idempotent.
+_registered_agents: set[str] = set()
+_register_lock = threading.Lock()
 
 
 def instrument(
@@ -24,6 +40,10 @@ def instrument(
     guard_mode: str | None = None,
     agent_id: str | None = None,
     agent_name: str | None = None,
+    agent_version: str | None = None,
+    system_prompt: str | None = None,
+    project_root: str | None = None,
+    auto_register: bool = True,
     **extra_config: Any,
 ) -> SaferClient:
     """Initialize SAFER. Idempotent — subsequent calls return the same client.
@@ -33,9 +53,26 @@ def instrument(
         - langchain → langchain adapter
 
     Framework not detected? Use `safer.track_event(...)` manually.
+
+    If `auto_register=True` (default), the first call in a process also
+    emits an `on_agent_register` event with a project code snapshot so
+    the backend can populate the Agents dashboard.
     """
     existing = get_client()
     if existing is not None:
+        # Idempotent — but if someone calls instrument() a second time
+        # for a *different* agent_id, still emit a register for that one.
+        if auto_register and agent_id:
+            _maybe_register(
+                existing,
+                agent_id=agent_id,
+                agent_name=agent_name,
+                agent_version=agent_version,
+                system_prompt=system_prompt,
+                project_root=project_root,
+                caller_file=_caller_file(),
+                framework_hint=None,
+            )
         return existing
 
     overrides: dict[str, Any] = {}
@@ -60,16 +97,53 @@ def instrument(
     atexit.register(clear_client)
 
     # Register framework adapters (best-effort, non-fatal).
-    _register_adapters(client)
+    framework = _register_adapters(client)
+
+    # Onboarding hook — fires once per process per agent_id.
+    if auto_register:
+        _maybe_register(
+            client,
+            agent_id=config.agent_id or agent_id,
+            agent_name=config.agent_name or agent_name,
+            agent_version=agent_version,
+            system_prompt=system_prompt,
+            project_root=project_root,
+            caller_file=_caller_file(),
+            framework_hint=framework,
+        )
 
     return client
 
 
-def _register_adapters(client: SaferClient) -> None:
+def _caller_file() -> str | None:
+    """Best-effort: the file of whoever called instrument().
+
+    Walks the call stack past this module so examples/apps see their
+    own entry point, not our package internals.
+    """
+    try:
+        stack = inspect.stack()
+    except Exception:
+        return None
+    for frame in stack:
+        filename = frame.filename
+        if not filename:
+            continue
+        if "/safer/instrument.py" in filename or filename.endswith("safer/instrument.py"):
+            continue
+        if "/safer/__init__.py" in filename:
+            continue
+        return filename
+    return None
+
+
+def _register_adapters(client: SaferClient) -> str:
     """Detect installed frameworks and register matching adapters.
 
-    Full adapters land in later phases. This scaffolding logs detected
-    frameworks so users know what's active.
+    Returns a short framework label suitable for the on_agent_register
+    payload (`anthropic`, `langchain`, `openai`, or `custom`). When
+    multiple are installed, the first one detected wins — order matches
+    the bundled adapter list.
     """
     detected: list[str] = []
 
@@ -96,7 +170,67 @@ def _register_adapters(client: SaferClient) -> None:
 
     if detected:
         log.info("SAFER: detected frameworks: %s", ", ".join(detected))
-    else:
-        log.info(
-            "SAFER: no framework detected; use safer.track_event() for manual instrumentation"
+        return detected[0]
+    log.info(
+        "SAFER: no framework detected; use safer.track_event() for manual instrumentation"
+    )
+    return "custom"
+
+
+def _maybe_register(
+    client: SaferClient,
+    *,
+    agent_id: str | None,
+    agent_name: str | None,
+    agent_version: str | None,
+    system_prompt: str | None,
+    project_root: str | None,
+    caller_file: str | None,
+    framework_hint: str | None,
+) -> None:
+    """Emit `on_agent_register` once per agent_id per process."""
+    aid = agent_id or _DEFAULT_AGENT_ID
+    with _register_lock:
+        if aid in _registered_agents:
+            return
+        _registered_agents.add(aid)
+
+    try:
+        snap: SnapshotResult = build_snapshot(
+            project_root=project_root,
+            caller_file=caller_file,
         )
+    except Exception as e:
+        log.warning("SAFER: snapshot failed, skipping on_agent_register: %s", e)
+        return
+
+    payload = OnAgentRegisterPayload(
+        session_id=f"boot_{aid}",
+        agent_id=aid,
+        sequence=0,
+        hook=Hook.ON_AGENT_REGISTER,
+        agent_name=agent_name or aid,
+        agent_version=agent_version,
+        framework=framework_hint or "custom",
+        system_prompt=system_prompt,
+        project_root=snap.project_root,
+        code_snapshot_b64=snap.b64,
+        code_snapshot_hash=snap.sha256,
+        file_count=snap.file_count,
+        total_bytes=snap.total_bytes,
+        source="sdk",
+    )
+    client.emit(payload)
+    log.info(
+        "SAFER: registered agent %s (%d files, %d bytes, hash %s)",
+        aid,
+        snap.file_count,
+        snap.total_bytes,
+        snap.sha256[:12],
+    )
+
+
+def _reset_registered_agents_for_tests() -> None:
+    """Test hook — forget which agents we've registered this process."""
+    with _register_lock:
+        _registered_agents.clear()
