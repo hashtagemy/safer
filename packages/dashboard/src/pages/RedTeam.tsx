@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import {
   ShieldAlert,
   Play,
@@ -116,12 +117,34 @@ function scoreTone(score: number): string {
 
 export default function RedTeam() {
   const { redteamByRunId } = useSaferRealtime(500);
+  const [searchParams, setSearchParams] = useSearchParams();
 
   const [runs, setRuns] = useState<RedTeamRun[]>([]);
   const [selectedRun, setSelectedRun] = useState<RedTeamRun | null>(null);
-  const [selectedAgentId, setSelectedAgentId] = useState<string>(
-    () => localStorage.getItem("safer.redteam.agentId") ?? ""
-  );
+  const [selectedAgentId, setSelectedAgentId] = useState<string>(() => {
+    // Deep-link preselect via /redteam?agent=<id>, falling back to the
+    // last agent the user ran from this browser.
+    const fromQuery = searchParams.get("agent");
+    if (fromQuery) {
+      localStorage.setItem("safer.redteam.agentId", fromQuery);
+      return fromQuery;
+    }
+    return localStorage.getItem("safer.redteam.agentId") ?? "";
+  });
+
+  // Keep the query string in sync with the currently selected agent so
+  // copying the URL always reproduces the view.
+  useEffect(() => {
+    const current = searchParams.get("agent") ?? "";
+    if (current === selectedAgentId) return;
+    const next = new URLSearchParams(searchParams);
+    if (selectedAgentId) {
+      next.set("agent", selectedAgentId);
+    } else {
+      next.delete("agent");
+    }
+    setSearchParams(next, { replace: true });
+  }, [selectedAgentId, searchParams, setSearchParams]);
   const [loadingList, setLoadingList] = useState(false);
   const [listError, setListError] = useState<string | null>(null);
 
