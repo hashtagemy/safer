@@ -45,6 +45,15 @@ _CREDENTIAL_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
 )
 
 
+def scan_patterns_project(files: list[tuple[str, str]]) -> list[PatternMatch]:
+    """Run `scan_patterns` on every file, tagging each hit with its path."""
+    all_matches: list[PatternMatch] = []
+    for path, source in files:
+        for match in scan_patterns(source):
+            all_matches.append(match.model_copy(update={"file_path": path}))
+    return all_matches
+
+
 def scan_patterns(source: str) -> list[PatternMatch]:
     """Run every deterministic rule against `source` and return matches.
 

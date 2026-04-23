@@ -95,6 +95,7 @@ class OnAgentRegisterPayload(EventBase):
     code_snapshot_hash: str = Field(description="SHA256 of the uncompressed JSON")
     file_count: int = 0
     total_bytes: int = 0
+    snapshot_truncated: bool = False
     registered_at: datetime = Field(default_factory=_utcnow)
 
 

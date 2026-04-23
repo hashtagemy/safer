@@ -94,3 +94,71 @@ async def review(
         agent_id=agent_id,
         component="inspector",
     )
+
+
+# Keeps the Opus user-message payload bounded even for large repos.
+_PROJECT_DIGEST_LOC_BUDGET = 4_000
+
+
+def _build_project_digest(files: list[tuple[str, str]]) -> str:
+    """Build a compact text digest of the project for the persona prompt.
+
+    If the total source fits under `_PROJECT_DIGEST_LOC_BUDGET` lines we
+    pass every file verbatim (prefixed with a header). Otherwise we
+    truncate each file and add a `...truncated` marker so the persona
+    still sees structural signal.
+    """
+    total_lines = sum(src.count("\n") + 1 for _, src in files)
+    chunks: list[str] = []
+    if total_lines <= _PROJECT_DIGEST_LOC_BUDGET:
+        for path, src in files:
+            chunks.append(f"# ===== {path} =====\n{src.rstrip()}\n")
+        return "\n".join(chunks)
+
+    per_file_budget = max(40, _PROJECT_DIGEST_LOC_BUDGET // max(1, len(files)))
+    for path, src in files:
+        lines = src.splitlines()
+        truncated = lines[:per_file_budget]
+        suffix = "" if len(lines) <= per_file_budget else f"\n# ...truncated ({len(lines) - per_file_budget} more lines)"
+        chunks.append(f"# ===== {path} =====\n" + "\n".join(truncated) + suffix + "\n")
+    return "\n".join(chunks)
+
+
+async def review_project(
+    *,
+    agent_id: str,
+    files: list[tuple[str, str]],
+    system_prompt: str = "",
+    tools: list[ToolSpec] | None = None,
+    ast_summary: ASTSummary,
+    pattern_matches: list[PatternMatch] | None = None,
+    active_policies: list[dict[str, Any]] | None = None,
+) -> Verdict:
+    """Project-wide persona review in INSPECTOR mode.
+
+    Feeds a length-bounded digest of every file into one Opus call so the
+    shared system prompt still caches. Per-file pattern hits and the
+    merged AST summary give the personas precise line references even
+    when the inline code is truncated.
+    """
+    digest = _build_project_digest(files)
+    synthetic = build_synthetic_event(
+        agent_id=agent_id,
+        source=digest,
+        system_prompt=system_prompt,
+        tools=tools or [],
+        ast_summary=ast_summary,
+        pattern_matches=pattern_matches or [],
+    )
+    synthetic["scan_mode"] = "project"
+    synthetic["file_count"] = len(files)
+    return await judge_event(
+        event=synthetic,
+        active_personas=INSPECTOR_PERSONAS,
+        mode=JudgeMode.INSPECTOR,
+        active_policies=active_policies or [],
+        event_id=synthetic["event_id"],
+        session_id="",
+        agent_id=agent_id,
+        component="inspector",
+    )

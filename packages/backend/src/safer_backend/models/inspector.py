@@ -58,6 +58,7 @@ class ToolSpec(BaseModel):
     risk_reason: str = Field(
         default="", description="Why the classifier picked this risk class"
     )
+    file_path: str | None = None
 
 
 class LLMCallSite(BaseModel):
@@ -66,6 +67,7 @@ class LLMCallSite(BaseModel):
     provider: str = Field(description="e.g. 'anthropic', 'openai', 'unknown'")
     function: str = Field(description="Full dotted call, e.g. 'client.messages.create'")
     line: int = 0
+    file_path: str | None = None
 
 
 class ASTSummary(BaseModel):
@@ -89,6 +91,7 @@ class PatternMatch(BaseModel):
     line: int = 0
     snippet: str = ""
     message: str = ""
+    file_path: str | None = None
 
 
 class PolicySuggestion(BaseModel):
@@ -123,6 +126,11 @@ class InspectorReport(BaseModel):
     findings: list[Finding] = Field(default_factory=list)
     persona_verdicts: dict[PersonaName, PersonaVerdict] = Field(default_factory=dict)
     policy_suggestions: list[PolicySuggestion] = Field(default_factory=list)
+
+    scan_mode: str = Field(
+        default="single", description="'single' for one-file scans, 'project' for multi-file"
+    )
+    scanned_files: list[str] = Field(default_factory=list)
 
     duration_ms: int = 0
     persona_review_skipped: bool = False

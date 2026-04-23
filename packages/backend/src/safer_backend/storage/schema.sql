@@ -10,14 +10,24 @@ PRAGMA busy_timeout = 5000;
 -- Agents (user's agents, discovered via `instrument()` or Add Agent)
 -- ============================================================
 CREATE TABLE IF NOT EXISTS agents (
-    agent_id        TEXT PRIMARY KEY,
-    name            TEXT NOT NULL,
-    framework       TEXT,
-    version         TEXT,
-    created_at      TEXT NOT NULL,
-    last_seen_at    TEXT,
-    risk_score      INTEGER DEFAULT 0,
-    metadata_json   TEXT DEFAULT '{}'
+    agent_id             TEXT PRIMARY KEY,
+    name                 TEXT NOT NULL,
+    framework            TEXT,
+    version              TEXT,
+    created_at           TEXT NOT NULL,
+    last_seen_at         TEXT,
+    risk_score           INTEGER DEFAULT 0,
+    metadata_json        TEXT DEFAULT '{}',
+    -- Onboarding (on_agent_register) columns
+    system_prompt        TEXT,
+    project_root         TEXT,
+    code_snapshot_blob   BLOB,
+    code_snapshot_hash   TEXT,
+    file_count           INTEGER DEFAULT 0,
+    total_bytes          INTEGER DEFAULT 0,
+    snapshot_truncated   INTEGER DEFAULT 0,
+    registered_at        TEXT,
+    latest_scan_id       TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_agents_last_seen ON agents(last_seen_at);
@@ -157,6 +167,24 @@ CREATE TABLE IF NOT EXISTS red_team_runs (
 
 CREATE INDEX IF NOT EXISTS idx_redteam_agent ON red_team_runs(agent_id, started_at DESC);
 CREATE INDEX IF NOT EXISTS idx_redteam_phase ON red_team_runs(phase);
+
+-- ============================================================
+-- Inspector reports (onboarding-phase scans, keyed by agent)
+-- ============================================================
+CREATE TABLE IF NOT EXISTS inspector_reports (
+    report_id        TEXT PRIMARY KEY,
+    agent_id         TEXT NOT NULL REFERENCES agents(agent_id),
+    created_at       TEXT NOT NULL,
+    scan_mode        TEXT NOT NULL DEFAULT 'single',
+    risk_score       INTEGER NOT NULL,
+    risk_level       TEXT NOT NULL,
+    duration_ms      INTEGER DEFAULT 0,
+    persona_skipped  INTEGER DEFAULT 0,
+    persona_error    TEXT,
+    report_json      TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_inspector_reports_agent ON inspector_reports(agent_id, created_at DESC);
 
 -- ============================================================
 -- Cost tracking (per Claude call, for live credit counter)

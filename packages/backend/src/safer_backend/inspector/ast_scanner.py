@@ -77,6 +77,49 @@ def scan(source: str, *, module_name: str = "") -> ASTSummary:
     )
 
 
+def scan_project(files: list[tuple[str, str]]) -> ASTSummary:
+    """Merge per-file AST summaries into one project-level summary.
+
+    Every tool and llm_call_site is tagged with its originating
+    `file_path` so the UI can link findings back to source locations.
+    `parse_error` surfaces the first file that failed to parse (plus a
+    count in the module name) so we don't lose the signal but also don't
+    stop scanning the rest of the project.
+    """
+    if not files:
+        return ASTSummary(module="")
+
+    merged_tools: list[ToolSpec] = []
+    merged_llm_calls: list[LLMCallSite] = []
+    merged_entry_points: list[str] = []
+    merged_imports: list[str] = []
+    total_loc = 0
+    parse_errors: list[str] = []
+
+    for path, source in files:
+        summary = scan(source, module_name=path)
+        total_loc += summary.loc
+        merged_imports.extend(summary.imports)
+        for ep in summary.entry_points:
+            merged_entry_points.append(f"{path}:{ep}")
+        for tool in summary.tools:
+            merged_tools.append(tool.model_copy(update={"file_path": path}))
+        for call in summary.llm_calls:
+            merged_llm_calls.append(call.model_copy(update={"file_path": path}))
+        if summary.parse_error:
+            parse_errors.append(f"{path}: {summary.parse_error}")
+
+    return ASTSummary(
+        module=f"project ({len(files)} files)",
+        tools=merged_tools,
+        llm_calls=merged_llm_calls,
+        entry_points=sorted(set(merged_entry_points)),
+        imports=sorted(set(merged_imports)),
+        loc=total_loc,
+        parse_error=("; ".join(parse_errors[:3]) + ("; ..." if len(parse_errors) > 3 else "")) if parse_errors else None,
+    )
+
+
 # ---------- imports ----------
 
 

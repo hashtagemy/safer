@@ -47,4 +47,8 @@ class Finding(BaseModel):
     owasp_id: str | None = Field(
         default=None, description="e.g. owasp_llm01_prompt_injection"
     )
+    file_path: str | None = Field(
+        default=None,
+        description="Relative file path when a finding is scoped to a project scan",
+    )
     created_at: datetime = Field(default_factory=_utcnow)

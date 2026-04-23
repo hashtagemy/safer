@@ -84,6 +84,7 @@ Hard rules, implemented in `safer_backend/router/persona_router.py`:
 | `before_tool_use` | Security, Compliance, Scope, Policy Warden |
 | `on_agent_decision` | Scope, Policy Warden (+ Security, Trust if risk_hint) |
 | `on_final_output` | All 6 personas |
+| `on_agent_register` | None — onboarding event, consumed by the Agent Registry (not the Judge). The Inspector scan is triggered later via `POST /v1/agents/{id}/scan`. |
 | Others | None (just logged, no Judge call) |
 
 **Do not add new personas to runtime Judge without updating this table.**
@@ -98,7 +99,7 @@ Hard rules, implemented in `safer_backend/router/persona_router.py`:
 ## Testing
 
 - `pytest` for backend + SDK.
-- Each adapter gets a test that emits all 9 hooks and verifies they reach the backend.
+- Each adapter gets a test that emits the 9 runtime hooks and verifies they reach the backend. `on_agent_register` is the 10th hook (onboarding-phase, emitted once per process by `instrument()`).
 - Judge engine test: prompt cache hit rate > 80% on the 2nd+ call.
 
 ## Commit style

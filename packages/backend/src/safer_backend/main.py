@@ -9,6 +9,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
 from .admin_api import router as admin_router
+from .agents_api import router as agents_router
 from .compliance.api import router as compliance_router
 from .config_api import router as config_router
 from .ingestion.http import router as http_ingest_router
@@ -53,6 +54,7 @@ app.add_middleware(
 
 app.include_router(ws_ingest_router)
 app.include_router(http_ingest_router)
+app.include_router(agents_router)
 app.include_router(inspector_router)
 app.include_router(policy_studio_router)
 app.include_router(session_report_router)

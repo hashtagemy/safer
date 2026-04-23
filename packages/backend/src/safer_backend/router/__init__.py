@@ -18,7 +18,11 @@ from typing import Deque
 from safer.events import Event, Hook, RiskHint
 
 from ..gateway import GuardMode, pre_call_check
-from ..storage.dao import insert_event
+from ..storage.dao import (
+    ingest_agent_register,
+    insert_event,
+    update_agent_last_seen,
+)
 from ..storage.db import get_db
 from ..ws_broadcaster import broadcaster
 from .haiku_prestep import score_step
@@ -51,12 +55,25 @@ def _judge_active() -> bool:
 
 async def route_event(event: Event) -> None:
     """Route one normalized event."""
+    # 0. Onboarding: `on_agent_register` has its own ingest path and does
+    # not flow through the runtime pipeline (no Judge, no Gateway, no
+    # Haiku, no session_report trigger).
+    if event.hook == Hook.ON_AGENT_REGISTER:
+        await _handle_agent_register(event)
+        return
+
     # 1. Persist
     try:
         await insert_event(event)
     except Exception as e:
         log.exception("failed to persist event %s: %s", event.event_id, e)
         return
+
+    # Heartbeat — every runtime event pings the agent's last_seen.
+    try:
+        await update_agent_last_seen(event.agent_id)
+    except Exception:  # pragma: no cover — defensive, never block ingestion
+        log.debug("update_agent_last_seen failed for %s", event.agent_id)
 
     event_payload = event.model_dump(mode="json")
 
@@ -292,3 +309,53 @@ async def _persist_verdict(verdict, event: Event) -> None:
             ),
         )
         await db.commit()
+
+
+async def _handle_agent_register(event: Event) -> None:
+    """Persist an `on_agent_register` event into the `agents` table.
+
+    Onboarding events never flow into `events` / `sessions`; they
+    describe the agent itself, not a runtime step. The only downstream
+    effect is a broadcast so the dashboard can add (or refresh) the
+    agent's card without a manual refetch.
+    """
+    payload = event.model_dump(mode="json")
+    try:
+        snapshot_changed = await ingest_agent_register(
+            agent_id=event.agent_id,
+            agent_name=payload.get("agent_name") or event.agent_id,
+            framework=payload.get("framework"),
+            version=payload.get("agent_version"),
+            system_prompt=payload.get("system_prompt"),
+            project_root=payload.get("project_root"),
+            code_snapshot_b64=payload.get("code_snapshot_b64") or "",
+            code_snapshot_hash=payload.get("code_snapshot_hash") or "",
+            file_count=int(payload.get("file_count") or 0),
+            total_bytes=int(payload.get("total_bytes") or 0),
+            truncated=bool(payload.get("snapshot_truncated") or False),
+            registered_at=payload.get("registered_at") or event.timestamp.isoformat(),
+        )
+    except Exception as e:
+        log.exception("failed to ingest on_agent_register for %s: %s", event.agent_id, e)
+        return
+
+    await broadcaster.broadcast(
+        {
+            "type": "agent_registered",
+            "agent_id": event.agent_id,
+            "name": payload.get("agent_name") or event.agent_id,
+            "framework": payload.get("framework"),
+            "registered_at": payload.get("registered_at")
+            or event.timestamp.isoformat(),
+            "code_snapshot_hash": payload.get("code_snapshot_hash"),
+            "file_count": int(payload.get("file_count") or 0),
+            "snapshot_changed": snapshot_changed,
+        }
+    )
+    log.info(
+        "agent registered: %s (framework=%s, files=%d, changed=%s)",
+        event.agent_id,
+        payload.get("framework"),
+        int(payload.get("file_count") or 0),
+        snapshot_changed,
+    )

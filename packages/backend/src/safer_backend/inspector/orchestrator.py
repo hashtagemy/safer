@@ -21,8 +21,10 @@ from ..models.inspector import (
 )
 from ..models.verdicts import PersonaName, PersonaVerdict, Verdict
 from .ast_scanner import scan as scan_ast
-from .pattern_rules import scan_patterns
+from .ast_scanner import scan_project
+from .pattern_rules import scan_patterns, scan_patterns_project
 from .persona_review import review as persona_review
+from .persona_review import review_project as persona_review_project
 from .policy_suggester import suggest_policies
 
 log = logging.getLogger("safer.inspector")
@@ -143,6 +145,9 @@ def _build_findings(
 
     for match in pattern_matches:
         category = category_of(match.flag)
+        location = (
+            f"{match.file_path}:{match.line}" if match.file_path else f"line {match.line}"
+        )
         findings.append(
             Finding(
                 agent_id=agent_id,
@@ -150,13 +155,14 @@ def _build_findings(
                 severity=match.severity,
                 category=category.value if category else "UNKNOWN",
                 flag=match.flag,
-                title=f"{match.rule_id.replace('_', ' ').title()} (line {match.line})",
+                title=f"{match.rule_id.replace('_', ' ').title()} ({location})",
                 description=match.message,
                 evidence=[match.snippet] if match.snippet else [],
                 reproduction_steps=[
                     f"Scan {match.rule_id} rule against source.",
-                    f"See line {match.line}.",
+                    f"See {location}.",
                 ],
+                file_path=match.file_path,
             )
         )
 
@@ -239,3 +245,80 @@ def _persona_score_to_severity(score: int) -> Severity:
     if score >= 30:
         return Severity.HIGH
     return Severity.CRITICAL
+
+
+async def inspect_project(
+    *,
+    agent_id: str,
+    files: list[tuple[str, str]],
+    system_prompt: str = "",
+    declared_tools: list[ToolSpec] | None = None,
+    active_policies: list[dict] | None = None,
+    skip_persona_review: bool = False,
+) -> InspectorReport:
+    """Project-wide scan — the path triggered by `POST /v1/agents/{id}/scan`.
+
+    Runs AST + deterministic patterns per file, then a single 3-persona
+    Opus review over a length-bounded project digest. Findings carry
+    their originating file path so the UI can link back to source.
+    """
+    started = time.monotonic()
+
+    ast_summary = scan_project(files)
+    tools_for_report = (
+        declared_tools if declared_tools is not None else list(ast_summary.tools)
+    )
+    pattern_matches = scan_patterns_project(files)
+
+    persona_verdicts: dict[PersonaName, PersonaVerdict] = {}
+    persona_review_error: str | None = None
+    review_skipped = skip_persona_review
+    if not skip_persona_review:
+        try:
+            verdict: Verdict = await persona_review_project(
+                agent_id=agent_id,
+                files=files,
+                system_prompt=system_prompt,
+                tools=tools_for_report,
+                ast_summary=ast_summary,
+                pattern_matches=pattern_matches,
+                active_policies=active_policies,
+            )
+            persona_verdicts = dict(verdict.personas)
+        except RuntimeError as e:
+            log.warning("persona review skipped — %s", e)
+            review_skipped = True
+            persona_review_error = str(e)
+        except Exception as e:  # pragma: no cover — defensive
+            log.exception("persona review failed")
+            review_skipped = True
+            persona_review_error = f"{type(e).__name__}: {e}"
+
+    findings = _build_findings(
+        agent_id=agent_id,
+        pattern_matches=pattern_matches,
+        persona_verdicts=persona_verdicts,
+    )
+    policy_suggestions = suggest_policies(
+        persona_verdicts={k.value: v for k, v in persona_verdicts.items()},
+        pattern_matches=pattern_matches,
+    )
+    risk_score = _compute_risk_score(pattern_matches, persona_verdicts)
+    risk_level = _risk_level_for(pattern_matches, persona_verdicts)
+    duration_ms = int((time.monotonic() - started) * 1000)
+
+    return InspectorReport(
+        agent_id=agent_id,
+        risk_score=risk_score,
+        risk_level=risk_level,
+        ast_summary=ast_summary,
+        pattern_matches=pattern_matches,
+        findings=findings,
+        persona_verdicts=persona_verdicts,
+        policy_suggestions=policy_suggestions,
+        scan_mode="project",
+        scanned_files=[path for path, _ in files],
+        duration_ms=duration_ms,
+        persona_review_skipped=review_skipped,
+        persona_review_error=persona_review_error,
+    )

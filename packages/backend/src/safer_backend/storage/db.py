@@ -16,12 +16,39 @@ SCHEMA_PATH = Path(__file__).parent / "schema.sql"
 DEFAULT_DB_PATH = os.environ.get("SAFER_DB_PATH", "./safer.db")
 
 
+# Additive column migrations — each entry is (table, column, type).
+# SQLite only supports adding columns via ALTER TABLE; we apply each one
+# iff the column isn't already present. Never drop, never rename here.
+_COLUMN_MIGRATIONS: tuple[tuple[str, str, str], ...] = (
+    ("agents", "system_prompt", "TEXT"),
+    ("agents", "project_root", "TEXT"),
+    ("agents", "code_snapshot_blob", "BLOB"),
+    ("agents", "code_snapshot_hash", "TEXT"),
+    ("agents", "file_count", "INTEGER DEFAULT 0"),
+    ("agents", "total_bytes", "INTEGER DEFAULT 0"),
+    ("agents", "snapshot_truncated", "INTEGER DEFAULT 0"),
+    ("agents", "registered_at", "TEXT"),
+    ("agents", "latest_scan_id", "TEXT"),
+)
+
+
+async def _apply_additive_migrations(db: aiosqlite.Connection) -> None:
+    for table, column, coltype in _COLUMN_MIGRATIONS:
+        async with db.execute(f"PRAGMA table_info({table})") as cur:
+            rows = await cur.fetchall()
+        existing = {row[1] for row in rows}
+        if column in existing:
+            continue
+        await db.execute(f"ALTER TABLE {table} ADD COLUMN {column} {coltype}")
+
+
 async def init_db(db_path: str | None = None) -> None:
-    """Create tables if they don't exist. Idempotent."""
+    """Create tables if they don't exist, then apply additive migrations."""
     path = db_path or DEFAULT_DB_PATH
     schema_sql = SCHEMA_PATH.read_text()
     async with aiosqlite.connect(path) as db:
         await db.executescript(schema_sql)
+        await _apply_additive_migrations(db)
         await db.commit()
 
 

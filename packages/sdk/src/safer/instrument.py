@@ -218,6 +218,7 @@ def _maybe_register(
         code_snapshot_hash=snap.sha256,
         file_count=snap.file_count,
         total_bytes=snap.total_bytes,
+        snapshot_truncated=snap.truncated,
         source="sdk",
     )
     client.emit(payload)
