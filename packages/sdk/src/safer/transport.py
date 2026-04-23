@@ -168,3 +168,34 @@ class AsyncTransport:
             await self._http.post(url, json={"events": batch}, headers=headers)
         except Exception as e:  # pragma: no cover — network issues
             log.warning("SAFER: HTTP fallback failed: %s (dropping batch of %d)", e, len(batch))
+
+    # ---------- REST side-channel (fire-and-forget) ----------
+
+    async def patch_agent_profile(
+        self,
+        agent_id: str,
+        *,
+        system_prompt: str | None = None,
+        name: str | None = None,
+        version: str | None = None,
+    ) -> None:
+        """Best-effort PATCH /v1/agents/{id}/profile. Never raises."""
+        if self._http is None:
+            return
+        body: dict[str, Any] = {}
+        if system_prompt is not None:
+            body["system_prompt"] = mask_payload({"v": system_prompt}).get("v")
+        if name is not None:
+            body["name"] = name
+        if version is not None:
+            body["version"] = version
+        if not body:
+            return
+        url = f"{self.config.api_url.rstrip('/')}/v1/agents/{agent_id}/profile"
+        headers = {"Content-Type": "application/json"}
+        if self.config.api_key:
+            headers["Authorization"] = f"Bearer {self.config.api_key}"
+        try:
+            await self._http.patch(url, json=body, headers=headers)
+        except Exception as e:  # pragma: no cover — network issues
+            log.debug("SAFER: profile patch failed for %s: %s", agent_id, e)

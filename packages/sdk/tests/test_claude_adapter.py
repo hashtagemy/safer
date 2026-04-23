@@ -180,3 +180,88 @@ def test_extract_response_text_with_tool_use():
     out = _extract_response_text(response)
     assert "Let me check." in out
     assert "[tool_use:get_order]" in out
+
+
+def test_system_prompt_is_synced_once_to_backend_profile(monkeypatch):
+    """First messages.create with system=... should schedule a profile patch.
+    Subsequent calls on the same tracker must not re-sync."""
+    client = safer.instrument(api_url="http://127.0.0.1:59999")
+    _capture_events(client)
+
+    calls: list[dict[str, Any]] = []
+
+    def _fake_patch(agent_id: str, **kwargs: Any) -> None:
+        calls.append({"agent_id": agent_id, **kwargs})
+
+    monkeypatch.setattr(client, "schedule_profile_patch", _fake_patch)
+
+    fake = _FakeAnthropic(_mock_response())
+    agent = wrap_anthropic(fake, agent_id="sync_agent", agent_name="Sync Agent")
+    agent.start_session()
+
+    agent.messages.create(
+        model="claude-opus-4-7",
+        system="You are a precise assistant.",
+        messages=[{"role": "user", "content": "hi"}],
+    )
+    agent.messages.create(
+        model="claude-opus-4-7",
+        system="different prompt",  # ignored, already synced
+        messages=[{"role": "user", "content": "again"}],
+    )
+
+    assert len(calls) == 1
+    assert calls[0]["agent_id"] == "sync_agent"
+    assert calls[0]["system_prompt"] == "You are a precise assistant."
+    assert calls[0]["name"] == "Sync Agent"
+
+
+def test_system_prompt_sync_handles_text_block_list(monkeypatch):
+    """system=[{type:'text', text:'...', cache_control:{...}}] should also sync."""
+    client = safer.instrument(api_url="http://127.0.0.1:59999")
+    _capture_events(client)
+
+    calls: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        client,
+        "schedule_profile_patch",
+        lambda agent_id, **kw: calls.append({"agent_id": agent_id, **kw}),
+    )
+
+    fake = _FakeAnthropic(_mock_response())
+    agent = wrap_anthropic(fake, agent_id="blocky", agent_name="Blocky")
+    agent.start_session()
+
+    agent.messages.create(
+        model="claude-opus-4-7",
+        system=[
+            {"type": "text", "text": "Part A."},
+            {"type": "text", "text": "Part B.", "cache_control": {"type": "ephemeral"}},
+        ],
+        messages=[{"role": "user", "content": "hi"}],
+    )
+
+    assert len(calls) == 1
+    assert "Part A." in calls[0]["system_prompt"]
+    assert "Part B." in calls[0]["system_prompt"]
+
+
+def test_no_system_prompt_means_no_profile_patch(monkeypatch):
+    """Calls without system= must not trigger a profile patch."""
+    client = safer.instrument(api_url="http://127.0.0.1:59999")
+    _capture_events(client)
+
+    calls: list[Any] = []
+    monkeypatch.setattr(
+        client, "schedule_profile_patch", lambda *a, **k: calls.append((a, k))
+    )
+
+    fake = _FakeAnthropic(_mock_response())
+    agent = wrap_anthropic(fake, agent_id="quiet")
+    agent.start_session()
+    agent.messages.create(
+        model="claude-opus-4-7",
+        messages=[{"role": "user", "content": "hi"}],
+    )
+
+    assert calls == []

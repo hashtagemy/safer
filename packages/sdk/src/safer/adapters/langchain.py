@@ -177,6 +177,7 @@ def _make_handler_cls() -> type:
             self._llm_start_ts: dict[str, float] = {}
             self._tool_start_ts: dict[str, float] = {}
             self._step_count = 0
+            self._profile_synced = False
 
         # ---------- internal helpers ----------
 
@@ -279,11 +280,28 @@ def _make_handler_cls() -> type:
         ) -> None:
             # Convert chat messages to a flat prompt string for our hook.
             flat: list[str] = []
+            system_parts: list[str] = []
             for turn in messages or []:
                 for m in turn or []:
                     content = getattr(m, "content", None) or getattr(m, "text", None)
                     if content:
                         flat.append(str(content))
+                    # Capture SystemMessage text so we can sync the agent
+                    # profile back to the backend the first time it shows up.
+                    if getattr(m, "type", None) == "system" and content:
+                        system_parts.append(str(content))
+            if system_parts and not self._profile_synced:
+                client = self._get_client()
+                if client is not None:
+                    self._profile_synced = True
+                    try:
+                        client.schedule_profile_patch(
+                            self.agent_id,
+                            system_prompt="\n".join(system_parts).strip() or None,
+                            name=self.agent_name,
+                        )
+                    except Exception as e:  # pragma: no cover — defensive
+                        log.debug("langchain profile sync failed: %s", e)
             self.on_llm_start(
                 serialized,
                 ["\n".join(flat)] if flat else [""],

@@ -86,6 +86,33 @@ class SaferClient:
     def new_session_id(self) -> str:
         return f"sess_{uuid4().hex[:12]}"
 
+    def schedule_profile_patch(
+        self,
+        agent_id: str,
+        *,
+        system_prompt: str | None = None,
+        name: str | None = None,
+        version: str | None = None,
+    ) -> None:
+        """Fire-and-forget PATCH /v1/agents/{id}/profile via transport loop.
+
+        Adapters call this the first time they see a system prompt so the
+        Agents dashboard learns the prompt without a manual instrument()
+        keyword argument.
+        """
+        if not self._started or self._loop is None:
+            return
+        coro = self.transport.patch_agent_profile(
+            agent_id,
+            system_prompt=system_prompt,
+            name=name,
+            version=version,
+        )
+        try:
+            asyncio.run_coroutine_threadsafe(coro, self._loop)
+        except Exception as e:  # pragma: no cover — defensive
+            log.debug("SAFER: could not schedule profile patch: %s", e)
+
     def track_event(
         self,
         hook: Hook | str,

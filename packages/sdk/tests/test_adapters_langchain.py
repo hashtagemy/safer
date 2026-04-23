@@ -110,6 +110,48 @@ def test_handler_emits_9_hook_flow(recording_client):
     assert hooks[-1] == "on_session_end"
 
 
+def test_chat_model_start_syncs_system_prompt_once(recording_client, monkeypatch):
+    """SystemMessage content in on_chat_model_start should schedule a
+    profile patch exactly once per handler instance."""
+    from langchain_core.messages import HumanMessage, SystemMessage
+
+    from safer.adapters.langchain import SaferCallbackHandler
+
+    calls: list[dict] = []
+
+    # recording_client fixture already installs a Dummy client on the
+    # module; replace its schedule_profile_patch too.
+    from safer import client as client_mod
+
+    dummy = client_mod._client
+
+    def _fake_patch(agent_id, **kw):
+        calls.append({"agent_id": agent_id, **kw})
+
+    monkeypatch.setattr(
+        dummy, "schedule_profile_patch", _fake_patch, raising=False
+    )
+
+    h = SaferCallbackHandler(agent_id="lc_agent", agent_name="LC Agent")
+    h.on_chain_start({"name": "chain"}, {"input": "hi"})
+    h.on_chat_model_start(
+        {"name": "ChatAnthropic"},
+        [[SystemMessage(content="Be concise."), HumanMessage(content="hi")]],
+        run_id="r1",
+    )
+    # Second call must not re-sync.
+    h.on_chat_model_start(
+        {"name": "ChatAnthropic"},
+        [[SystemMessage(content="Be verbose."), HumanMessage(content="again")]],
+        run_id="r2",
+    )
+
+    assert len(calls) == 1
+    assert calls[0]["agent_id"] == "lc_agent"
+    assert calls[0]["system_prompt"] == "Be concise."
+    assert calls[0]["name"] == "LC Agent"
+
+
 def test_handler_emits_on_error(recording_client):
     from safer.adapters.langchain import SaferCallbackHandler
 

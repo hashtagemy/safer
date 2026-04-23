@@ -129,6 +129,7 @@ class AnthropicTracker:
         self._session_started = False
         self._session_start_ts: float | None = None
         self._total_cost_usd = 0.0
+        self._profile_synced = False
 
         # Wrap messages proxy; other attributes pass through.
         self.messages = _MessagesProxy(client.messages, self)
@@ -264,6 +265,7 @@ class AnthropicTracker:
         messages = kwargs.get("messages", [])
         prompt = _summarize_messages(messages)
         tools = kwargs.get("tools") or []
+        self._maybe_sync_profile(kwargs.get("system"))
         self._emit(
             BeforeLLMCallPayload(
                 session_id=self.session_id,
@@ -277,6 +279,28 @@ class AnthropicTracker:
                 source="adapter:claude_sdk",
             )
         )
+
+    def _maybe_sync_profile(self, system: Any) -> None:
+        """First time we see a non-empty system= argument on messages.create,
+        PATCH it to /v1/agents/{id}/profile so the dashboard can show the
+        real system prompt without the user wiring it manually."""
+        if self._profile_synced:
+            return
+        text = _normalize_system_param(system)
+        if not text:
+            return
+        client = self._safer or get_client()
+        if client is None:
+            return
+        self._profile_synced = True
+        try:
+            client.schedule_profile_patch(
+                self.agent_id,
+                system_prompt=text,
+                name=self.agent_name,
+            )
+        except Exception as e:  # pragma: no cover — defensive
+            log.debug("SAFER: profile sync failed for %s: %s", self.agent_id, e)
 
     def _emit_after_llm(self, kwargs: dict[str, Any], response: Any, latency_ms: int) -> None:
         model = kwargs.get("model", "unknown")
@@ -390,3 +414,27 @@ def _get(obj: Any, attr: str, default: Any = None) -> Any:
     if isinstance(obj, dict):
         return obj.get(attr, default)
     return getattr(obj, attr, default)
+
+
+def _normalize_system_param(system: Any) -> str:
+    """Turn Anthropic's system= (str or list of text blocks) into one string."""
+    if system is None:
+        return ""
+    if isinstance(system, str):
+        return system.strip()
+    if isinstance(system, list):
+        parts: list[str] = []
+        for block in system:
+            if isinstance(block, dict):
+                if block.get("type") == "text":
+                    text = block.get("text")
+                    if text:
+                        parts.append(str(text))
+            else:
+                t = getattr(block, "type", None)
+                if t == "text":
+                    text = getattr(block, "text", None)
+                    if text:
+                        parts.append(str(text))
+        return "\n".join(parts).strip()
+    return str(system).strip()
