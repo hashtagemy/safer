@@ -4,6 +4,7 @@ import TopBar from "./components/TopBar";
 import Overview from "./pages/Overview";
 import Live from "./pages/Live";
 import Agents from "./pages/Agents";
+import AgentDetail from "./pages/AgentDetail";
 import Sessions from "./pages/Sessions";
 import SessionDetail from "./pages/SessionDetail";
 import Policies from "./pages/Policies";
@@ -24,6 +25,7 @@ export default function App() {
             <Route path="/overview" element={<Overview />} />
             <Route path="/live" element={<Live />} />
             <Route path="/agents" element={<Agents />} />
+            <Route path="/agents/:agentId" element={<AgentDetail />} />
             <Route path="/sessions" element={<Sessions />} />
             <Route path="/sessions/:id" element={<SessionDetail />} />
             <Route path="/policies" element={<Policies />} />
