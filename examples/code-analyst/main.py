@@ -144,7 +144,7 @@ def main() -> None:
     if not os.environ.get("ANTHROPIC_API_KEY"):
         raise SystemExit("ANTHROPIC_API_KEY is required to run this example.")
 
-    instrument()
+    instrument(agent_id="code_analyst", agent_name="Code Analyst")
     handler = SaferCallbackHandler(
         agent_id="code_analyst", agent_name="Code Analyst"
     )

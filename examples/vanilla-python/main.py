@@ -19,7 +19,7 @@ SESSION_ID = f"sess_{int(time.time())}"
 
 
 def main() -> None:
-    instrument()
+    instrument(agent_id=AGENT_ID, agent_name="Vanilla Demo")
 
     track_event(
         Hook.ON_SESSION_START,

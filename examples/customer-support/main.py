@@ -187,8 +187,14 @@ def main() -> int:
         print("ERROR: ANTHROPIC_API_KEY is not set.", file=sys.stderr)
         return 1
 
-    # One-line SAFER instrumentation.
-    instrument(api_url=os.environ.get("SAFER_API_URL", "http://localhost:8000"))
+    # One-line SAFER instrumentation. Pass the same agent_id / agent_name
+    # that wrap_anthropic() below uses so the onboarding (on_agent_register)
+    # hook and the runtime events all land on one dashboard card.
+    instrument(
+        api_url=os.environ.get("SAFER_API_URL", "http://localhost:8000"),
+        agent_id="customer-support",
+        agent_name="Customer Support Agent",
+    )
 
     anthropic_client = Anthropic()
 
