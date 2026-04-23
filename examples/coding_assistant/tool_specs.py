@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from coding_assistant.tools.filesystem import grep_code, read_file, write_file
-from coding_assistant.tools.shell import run_shell
-from coding_assistant.tools.web import fetch_url, search_web
+from tools.filesystem import grep_code, read_file, write_file
+from tools.shell import run_shell
+from tools.web import fetch_url, search_web
 
 TOOL_FUNCS: dict[str, Any] = {
     "read_file": read_file,

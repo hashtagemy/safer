@@ -70,6 +70,22 @@ two rows (supervisor + worker). Click one to see its Session Report
 (Quality + thought-chain narrative + timeline) once the post-run
 aggregator runs.
 
+## Scan scope
+
+Because this directory has its own `pyproject.toml`, SAFER picks it as
+the workspace root. The default `instrument()` import-graph walk stays
+inside this folder, so the Inspector scans ~11 files (the demo's own
+code) rather than the surrounding SAFER repo. To change behavior:
+
+```python
+instrument(
+    agent_id="coding-worker",
+    # scan_mode="directory",       # recursive .py walk instead of import graph
+    # include=["prompts/*.md"],    # pull in extra files (non-py ok)
+    # exclude=["experiments/**"],  # drop paths
+)
+```
+
 ## Intentional security issues
 
 The tools module deliberately contains patterns a production agent

@@ -16,13 +16,13 @@ from anthropic import Anthropic
 
 from safer.adapters.claude_sdk import wrap_anthropic
 
-from coding_assistant.agents.worker import WorkerAgent
-from coding_assistant.config import (
+from agents.worker import WorkerAgent
+from config import (
     DEFAULT_MODEL,
     SUPERVISOR_AGENT_ID,
     SUPERVISOR_AGENT_NAME,
 )
-from coding_assistant.memory import ConversationMemory
+from memory import ConversationMemory
 
 SUPERVISOR_SYSTEM_PROMPT = """You are the Supervisor of a coding assistant.
 

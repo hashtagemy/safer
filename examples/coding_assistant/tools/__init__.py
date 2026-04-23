@@ -6,9 +6,9 @@ injection, disabled SSL verification, plaintext HTTP) so the demo
 exercises the Inspector's deterministic pattern rules end-to-end.
 """
 
-from coding_assistant.tools.filesystem import grep_code, read_file, write_file
-from coding_assistant.tools.shell import run_shell
-from coding_assistant.tools.web import fetch_url, search_web
+from tools.filesystem import grep_code, read_file, write_file
+from tools.shell import run_shell
+from tools.web import fetch_url, search_web
 
 __all__ = [
     "read_file",

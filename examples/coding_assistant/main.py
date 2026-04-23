@@ -17,23 +17,24 @@ import os
 import sys
 from pathlib import Path
 
-# Run-from-anywhere: drop `examples/` onto sys.path so absolute imports
-# (`from coding_assistant.foo ...`) resolve whether the user launches
-# the script directly or via `python -m`.
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+# Put the demo's own directory on sys.path so sibling modules (agents,
+# tools, config, memory) import without a package prefix. Keeping it
+# simple also makes SAFER's static import-graph walk resolve the full
+# tree from main.py alone.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from anthropic import Anthropic  # noqa: E402
 
 from safer import instrument  # noqa: E402
 
-from coding_assistant.agents import SupervisorAgent, WorkerAgent  # noqa: E402
-from coding_assistant.config import (  # noqa: E402
+from agents import SupervisorAgent, WorkerAgent  # noqa: E402
+from config import (  # noqa: E402
     SUPERVISOR_AGENT_ID,
     SUPERVISOR_AGENT_NAME,
     WORKER_AGENT_ID,
     WORKER_AGENT_NAME,
 )
-from coding_assistant.memory import ConversationMemory  # noqa: E402
+from memory import ConversationMemory  # noqa: E402
 
 BANNER = """\
 SAFER coding-assistant demo

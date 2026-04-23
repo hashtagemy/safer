@@ -96,6 +96,28 @@ Hard rules, implemented in `safer_backend/router/persona_router.py`:
 - **Schema change = migration.** Update Pydantic models (`models/`) and run migration.
 - Never mutate events in place; append-only.
 
+## Snapshot scope (on_agent_register)
+
+When `instrument()` fires `on_agent_register`, the SDK ships a gzip
+snapshot of the agent's source. Default scope is:
+
+1. **Workspace root** — the nearest `pyproject.toml` / `package.json`
+   ancestor of the `instrument()` caller. If none is found, the caller's
+   directory is used.
+2. **Import graph walk** from the caller file, bounded to that
+   workspace root. Files outside (site-packages, monorepo siblings,
+   stdlib) are dropped silently.
+3. `__init__.py` of every ancestor package gets pulled in too.
+4. Fallback: if the walk produces zero files, fall back to a recursive
+   `.py` walk of the workspace root.
+
+Override knobs on `instrument()`:
+- `scan_mode="imports" | "directory" | "explicit"`
+- `include=[glob, ...]` — appends files (also accepts non-`.py`, e.g.,
+  `prompts/**/*.md`)
+- `exclude=[glob, ...]` — drops paths
+- `project_root=...` — override workspace root detection
+
 ## Testing
 
 - `pytest` for backend + SDK.

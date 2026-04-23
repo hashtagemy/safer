@@ -1,0 +1,10 @@
+[project]
+name = "safer-demo-coding-assistant"
+version = "0.1.0"
+description = "SAFER multi-agent chat demo — supervisor + worker + 6 tools."
+requires-python = ">=3.11"
+
+# Only here to anchor SAFER's workspace-root detection so the on_agent_register
+# snapshot covers just this directory rather than the surrounding SAFER repo.
+# The demo's real deps (safer, anthropic) come from the parent uv workspace.
+dependencies = []

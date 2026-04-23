@@ -21,7 +21,7 @@ from typing import Any
 from .client import SaferClient, clear_client, get_client, set_client
 from .config import SaferConfig
 from .events import Hook, OnAgentRegisterPayload
-from .snapshot import SnapshotResult, build_snapshot
+from .snapshot import ScanMode, SnapshotResult, build_snapshot
 
 log = logging.getLogger("safer")
 
@@ -43,6 +43,9 @@ def instrument(
     agent_version: str | None = None,
     system_prompt: str | None = None,
     project_root: str | None = None,
+    scan_mode: ScanMode | None = None,
+    include: list[str] | tuple[str, ...] | None = None,
+    exclude: list[str] | tuple[str, ...] | None = None,
     auto_register: bool = True,
     **extra_config: Any,
 ) -> SaferClient:
@@ -57,7 +60,20 @@ def instrument(
     If `auto_register=True` (default), the first call in a process also
     emits an `on_agent_register` event with a project code snapshot so
     the backend can populate the Agents dashboard.
+
+    Snapshot scope controls:
+    - `scan_mode` — "imports" (default): walk the caller file's import
+      graph bounded to the workspace root. "directory": recursive `.py`
+      walk under the workspace root (the pre-26 behavior). "explicit":
+      only patterns in `include`.
+    - `include` — extra glob patterns to add on top of the chosen mode.
+      Also the way to pull in non-`.py` files (e.g., `prompts/**/*.md`).
+    - `exclude` — glob patterns to drop.
+    - `project_root` — override the workspace root detection.
     """
+    include_tuple = tuple(include or ())
+    exclude_tuple = tuple(exclude or ())
+
     existing = get_client()
     if existing is not None:
         # Idempotent — but if someone calls instrument() a second time
@@ -72,6 +88,9 @@ def instrument(
                 project_root=project_root,
                 caller_file=_caller_file(),
                 framework_hint=None,
+                scan_mode=scan_mode,
+                include=include_tuple,
+                exclude=exclude_tuple,
             )
         return existing
 
@@ -110,6 +129,9 @@ def instrument(
             project_root=project_root,
             caller_file=_caller_file(),
             framework_hint=framework,
+            scan_mode=scan_mode,
+            include=include_tuple,
+            exclude=exclude_tuple,
         )
 
     return client
@@ -187,6 +209,9 @@ def _maybe_register(
     project_root: str | None,
     caller_file: str | None,
     framework_hint: str | None,
+    scan_mode: ScanMode | None = None,
+    include: tuple[str, ...] = (),
+    exclude: tuple[str, ...] = (),
 ) -> None:
     """Emit `on_agent_register` once per agent_id per process."""
     aid = agent_id or _DEFAULT_AGENT_ID
@@ -199,6 +224,9 @@ def _maybe_register(
         snap: SnapshotResult = build_snapshot(
             project_root=project_root,
             caller_file=caller_file,
+            scan_mode=scan_mode,
+            include=include,
+            exclude=exclude,
         )
     except Exception as e:
         log.warning("SAFER: snapshot failed, skipping on_agent_register: %s", e)
@@ -223,11 +251,12 @@ def _maybe_register(
     )
     client.emit(payload)
     log.info(
-        "SAFER: registered agent %s (%d files, %d bytes, hash %s)",
+        "SAFER: registered agent %s (%d files, %d bytes, hash %s, mode=%s)",
         aid,
         snap.file_count,
         snap.total_bytes,
         snap.sha256[:12],
+        snap.scan_mode_used,
     )
 
 

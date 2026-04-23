@@ -16,13 +16,13 @@ from anthropic import Anthropic
 
 from safer.adapters.claude_sdk import wrap_anthropic
 
-from coding_assistant.config import (
+from config import (
     DEFAULT_MODEL,
     WORKER_AGENT_ID,
     WORKER_AGENT_NAME,
     WORKER_MAX_STEPS,
 )
-from coding_assistant.tool_specs import TOOL_FUNCS, TOOL_SPECS
+from tool_specs import TOOL_FUNCS, TOOL_SPECS
 
 WORKER_SYSTEM_PROMPT = """You are the Worker half of a coding assistant.
 
