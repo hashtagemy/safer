@@ -84,6 +84,7 @@ class SupervisorAgent:
                 worker_reply = self._worker.run(
                     task=sub_task,
                     user_context=user_message,
+                    parent_session_id=agent.session_id,
                 )
                 reply = worker_reply
             else:

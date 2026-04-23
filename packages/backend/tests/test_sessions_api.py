@@ -96,6 +96,36 @@ def test_list_sessions_returns_rows(app_client):
     assert row["total_steps"] == 3
 
 
+def test_insert_event_persists_parent_session_from_on_session_start(app_client):
+    """When an on_session_start event carries parent_session_id, it must
+    land in the sessions row so the dashboard can render the link."""
+    from safer.events import OnSessionStartPayload
+
+    client, dao_mod = app_client
+
+    parent_evt = OnSessionStartPayload(
+        session_id="sess_parent",
+        agent_id="agent_parent",
+        sequence=0,
+        agent_name="Parent",
+    )
+    child_evt = OnSessionStartPayload(
+        session_id="sess_child",
+        agent_id="agent_child",
+        sequence=0,
+        agent_name="Child",
+        parent_session_id="sess_parent",
+    )
+    _run_sync(dao_mod.insert_event(parent_evt))
+    _run_sync(dao_mod.insert_event(child_evt))
+
+    resp = client.get("/v1/sessions")
+    assert resp.status_code == 200
+    rows = {r["session_id"]: r for r in resp.json()["sessions"]}
+    assert rows["sess_parent"]["parent_session_id"] is None
+    assert rows["sess_child"]["parent_session_id"] == "sess_parent"
+
+
 def test_list_sessions_agent_filter(app_client):
     client, dao_mod = app_client
     _run_sync(_seed(dao_mod, session_id="sess_a", agent_id="agent_a"))

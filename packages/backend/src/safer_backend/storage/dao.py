@@ -65,22 +65,45 @@ async def upsert_agent(
         await db.commit()
 
 
-async def ensure_session(session_id: str, agent_id: str) -> None:
+async def ensure_session(
+    session_id: str,
+    agent_id: str,
+    *,
+    parent_session_id: str | None = None,
+) -> None:
     async with get_db() as db:
         await db.execute(
             """
-            INSERT OR IGNORE INTO sessions (session_id, agent_id, started_at)
-            VALUES (?, ?, ?)
+            INSERT OR IGNORE INTO sessions (session_id, agent_id, started_at, parent_session_id)
+            VALUES (?, ?, ?, ?)
             """,
-            (session_id, agent_id, _utcnow_iso()),
+            (session_id, agent_id, _utcnow_iso(), parent_session_id),
         )
+        # If the row already existed without a parent (e.g. a bare event
+        # arrived before on_session_start), fill it in now.
+        if parent_session_id is not None:
+            await db.execute(
+                """
+                UPDATE sessions
+                SET parent_session_id = ?
+                WHERE session_id = ? AND (parent_session_id IS NULL OR parent_session_id = '')
+                """,
+                (parent_session_id, session_id),
+            )
         await db.commit()
 
 
 async def insert_event(event: Event) -> None:
     """Insert a validated event. Upserts the agent and session if needed."""
     await upsert_agent(event.agent_id)
-    await ensure_session(event.session_id, event.agent_id)
+    parent_session_id = None
+    if event.hook.value == "on_session_start":
+        parent_session_id = getattr(event, "parent_session_id", None)
+    await ensure_session(
+        event.session_id,
+        event.agent_id,
+        parent_session_id=parent_session_id,
+    )
     async with get_db() as db:
         await db.execute(
             """
@@ -572,7 +595,8 @@ async def list_agent_sessions(agent_id: str, limit: int = 100) -> list["AgentSes
         async with db.execute(
             """
             SELECT session_id, started_at, ended_at, total_steps,
-                   total_cost_usd, success, overall_health, report_json
+                   total_cost_usd, success, overall_health, report_json,
+                   parent_session_id
             FROM sessions
             WHERE agent_id = ?
             ORDER BY started_at DESC
@@ -593,6 +617,7 @@ async def list_agent_sessions(agent_id: str, limit: int = 100) -> list["AgentSes
                 success=bool(row[5]),
                 overall_health=row[6],
                 has_report=bool(row[7]),
+                parent_session_id=row[8],
             )
         )
     return out

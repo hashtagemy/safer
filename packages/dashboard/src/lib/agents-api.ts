@@ -48,6 +48,7 @@ export interface AgentSessionRow {
   success: boolean;
   overall_health: number | null;
   has_report: boolean;
+  parent_session_id: string | null;
 }
 
 export interface AgentRedTeamRow {

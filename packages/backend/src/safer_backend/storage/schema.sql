@@ -45,11 +45,13 @@ CREATE TABLE IF NOT EXISTS sessions (
     success          INTEGER DEFAULT 1,  -- boolean
     overall_health   INTEGER,            -- from SessionReport, null until session ends
     thought_chain_narrative TEXT,
-    report_json      TEXT                -- serialized SessionReport snapshot
+    report_json      TEXT,               -- serialized SessionReport snapshot
+    parent_session_id TEXT               -- session that triggered this one (supervisor → worker)
 );
 
 CREATE INDEX IF NOT EXISTS idx_sessions_agent_started ON sessions(agent_id, started_at DESC);
 CREATE INDEX IF NOT EXISTS idx_sessions_ended ON sessions(ended_at);
+CREATE INDEX IF NOT EXISTS idx_sessions_parent ON sessions(parent_session_id);
 
 -- ============================================================
 -- Events (append-only, 9-hook payloads)

@@ -72,6 +72,7 @@ class AgentSessionRow(BaseModel):
     success: bool = True
     overall_health: int | None = None
     has_report: bool = False
+    parent_session_id: str | None = None
 
 
 class AgentRedTeamRow(BaseModel):

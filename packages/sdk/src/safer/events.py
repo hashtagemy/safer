@@ -104,6 +104,11 @@ class OnSessionStartPayload(EventBase):
     agent_name: str
     agent_version: str | None = None
     context: dict[str, Any] = Field(default_factory=dict)
+    parent_session_id: str | None = Field(
+        default=None,
+        description="Session that triggered this one (e.g. supervisor → worker). "
+        "Lets the dashboard draw a parent/child link between sessions.",
+    )
 
 
 class BeforeLLMCallPayload(EventBase):

@@ -141,6 +141,7 @@ class AnthropicTracker:
         *,
         agent_version: str | None = None,
         context: dict[str, Any] | None = None,
+        parent_session_id: str | None = None,
     ) -> None:
         if self._session_started:
             return
@@ -154,6 +155,7 @@ class AnthropicTracker:
                 agent_name=self.agent_name,
                 agent_version=agent_version,
                 context=context or {},
+                parent_session_id=parent_session_id,
                 source="adapter:claude_sdk",
             )
         )

@@ -67,6 +67,7 @@ export interface SessionListItem {
   total_cost_usd: number;
   overall_health: number | null;
   success: boolean;
+  parent_session_id: string | null;
 }
 
 export interface SessionEvent {

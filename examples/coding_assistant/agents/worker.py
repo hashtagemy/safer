@@ -48,14 +48,21 @@ class WorkerAgent:
     def __init__(self, anthropic_client: Anthropic) -> None:
         self._client = anthropic_client
 
-    def run(self, task: str, user_context: str | None = None) -> str:
+    def run(
+        self,
+        task: str,
+        user_context: str | None = None,
+        *,
+        parent_session_id: str | None = None,
+    ) -> str:
         agent = wrap_anthropic(
             self._client,
             agent_id=WORKER_AGENT_ID,
             agent_name=WORKER_AGENT_NAME,
         )
         agent.start_session(
-            context={"task": task, "user_context": user_context or ""}
+            context={"task": task, "user_context": user_context or ""},
+            parent_session_id=parent_session_id,
         )
 
         user_message = task if not user_context else (

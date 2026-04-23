@@ -404,6 +404,9 @@ function SessionsTab({ agentId }: { agentId: string }) {
                       health {r.overall_health}
                     </Badge>
                   )}
+                  {r.parent_session_id && (
+                    <Badge variant="ice">child session</Badge>
+                  )}
                   {!r.success && <Badge variant="critical">failed</Badge>}
                 </button>
                 {open && (
@@ -414,6 +417,20 @@ function SessionsTab({ agentId }: { agentId: string }) {
                     <dd>{formatDate(r.ended_at)}</dd>
                     <dt>cost</dt>
                     <dd>${r.total_cost_usd.toFixed(4)}</dd>
+                    {r.parent_session_id && (
+                      <>
+                        <dt>triggered by</dt>
+                        <dd>
+                          <Link
+                            to={`/sessions/${encodeURIComponent(r.parent_session_id)}`}
+                            className="inline-flex items-center gap-1 text-safer-ice hover:underline break-all"
+                          >
+                            {r.parent_session_id}
+                            <ExternalLink className="h-3 w-3 shrink-0" />
+                          </Link>
+                        </dd>
+                      </>
+                    )}
                     <dt>report</dt>
                     <dd>
                       {r.has_report ? (

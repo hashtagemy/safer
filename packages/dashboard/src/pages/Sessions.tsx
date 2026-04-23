@@ -114,6 +114,17 @@ export default function Sessions() {
                       >
                         {r.session_id}
                       </Link>
+                      {r.parent_session_id && (
+                        <div className="mt-0.5 text-[10px] text-muted-foreground">
+                          ↳ triggered by{" "}
+                          <Link
+                            to={`/sessions/${encodeURIComponent(r.parent_session_id)}`}
+                            className="text-safer-ice hover:underline"
+                          >
+                            {r.parent_session_id}
+                          </Link>
+                        </div>
+                      )}
                     </td>
                     <td className="p-3 text-muted-foreground truncate">
                       {r.agent_name} · {r.agent_id}

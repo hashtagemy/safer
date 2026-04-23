@@ -29,6 +29,7 @@ _COLUMN_MIGRATIONS: tuple[tuple[str, str, str], ...] = (
     ("agents", "snapshot_truncated", "INTEGER DEFAULT 0"),
     ("agents", "registered_at", "TEXT"),
     ("agents", "latest_scan_id", "TEXT"),
+    ("sessions", "parent_session_id", "TEXT"),
 )
 
 

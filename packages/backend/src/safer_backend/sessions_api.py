@@ -28,6 +28,7 @@ class SessionListItem(BaseModel):
     total_cost_usd: float
     overall_health: int | None = None
     success: bool = True
+    parent_session_id: str | None = None
 
 
 class SessionListResponse(BaseModel):
@@ -83,7 +84,8 @@ async def list_sessions(
         async with db.execute(
             f"""
             SELECT s.session_id, s.agent_id, a.name, s.started_at, s.ended_at,
-                   s.total_steps, s.total_cost_usd, s.overall_health, s.success
+                   s.total_steps, s.total_cost_usd, s.overall_health, s.success,
+                   s.parent_session_id
             FROM sessions s
             JOIN agents a ON s.agent_id = a.agent_id
             {where}
@@ -104,6 +106,7 @@ async def list_sessions(
             total_cost_usd=float(r[6] or 0.0),
             overall_health=int(r[7]) if r[7] is not None else None,
             success=bool(r[8]) if r[8] is not None else True,
+            parent_session_id=r[9],
         )
         for r in rows
     ]
