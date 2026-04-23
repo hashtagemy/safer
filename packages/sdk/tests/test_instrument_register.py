@@ -105,6 +105,32 @@ def test_second_agent_id_still_registers(
     assert ids == ["agent_one", "agent_two"]
 
 
+def test_second_instrument_call_carries_detected_framework(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Second instrument() for a new agent_id must reuse the framework
+    detected on the first call. Previously the hint fell back to
+    "custom" because _register_adapters wasn't cached."""
+    (tmp_path / "main.py").write_text("x = 1\n", encoding="utf-8")
+    captured = _capture_emissions(monkeypatch)
+
+    safer.instrument(
+        api_url="http://127.0.0.1:59999",
+        agent_id="agent_one",
+        project_root=str(tmp_path),
+    )
+    safer.instrument(
+        api_url="http://127.0.0.1:59999",
+        agent_id="agent_two",
+        project_root=str(tmp_path),
+    )
+
+    registers = [e for e in captured if isinstance(e, OnAgentRegisterPayload)]
+    assert len(registers) == 2
+    assert registers[0].framework == registers[1].framework
+    assert registers[1].framework in {"anthropic", "langchain", "openai", "custom"}
+
+
 def test_register_payload_carries_framework_and_prompt(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

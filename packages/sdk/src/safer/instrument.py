@@ -32,6 +32,11 @@ _DEFAULT_AGENT_ID = "agent_default"
 _registered_agents: set[str] = set()
 _register_lock = threading.Lock()
 
+# Framework detection is cached on the first instrument() call so that
+# subsequent calls (for a second agent_id in the same process) carry the
+# correct framework label instead of falling back to "custom".
+_detected_framework: str | None = None
+
 
 def instrument(
     *,
@@ -71,6 +76,7 @@ def instrument(
     - `exclude` — glob patterns to drop.
     - `project_root` — override the workspace root detection.
     """
+    global _detected_framework
     include_tuple = tuple(include or ())
     exclude_tuple = tuple(exclude or ())
 
@@ -87,7 +93,7 @@ def instrument(
                 system_prompt=system_prompt,
                 project_root=project_root,
                 caller_file=_caller_file(),
-                framework_hint=None,
+                framework_hint=_detected_framework,
                 scan_mode=scan_mode,
                 include=include_tuple,
                 exclude=exclude_tuple,
@@ -117,6 +123,7 @@ def instrument(
 
     # Register framework adapters (best-effort, non-fatal).
     framework = _register_adapters(client)
+    _detected_framework = framework
 
     # Onboarding hook — fires once per process per agent_id.
     if auto_register:
@@ -262,5 +269,7 @@ def _maybe_register(
 
 def _reset_registered_agents_for_tests() -> None:
     """Test hook — forget which agents we've registered this process."""
+    global _detected_framework
     with _register_lock:
         _registered_agents.clear()
+    _detected_framework = None
