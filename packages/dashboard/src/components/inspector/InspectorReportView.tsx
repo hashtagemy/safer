@@ -1,6 +1,10 @@
+import { useState } from "react";
 import {
   CheckCircle2,
+  ChevronDown,
+  ChevronRight,
   FileCode,
+  Files,
   MessageSquare,
   Wrench,
 } from "lucide-react";
@@ -25,7 +29,51 @@ export function InspectorReportView({ report }: { report: InspectorReport }) {
       <PatternsCard matches={report.pattern_matches} />
       <FindingsCard findings={report.findings} />
       <SuggestionsCard suggestions={report.policy_suggestions} />
+      <ScannedFilesCard files={report.scanned_files} />
     </div>
+  );
+}
+
+function ScannedFilesCard({ files }: { files: string[] }) {
+  const [open, setOpen] = useState(false);
+  if (files.length === 0) return null;
+  const PREVIEW = 10;
+  const shown = open ? files : files.slice(0, PREVIEW);
+  const hidden = files.length - shown.length;
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-base flex items-center gap-2">
+          <Files className="h-4 w-4 text-safer-ice" />
+          Scanned files ({files.length})
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-1">
+        <ul className="text-[11px] font-mono text-muted-foreground space-y-0.5 max-h-64 overflow-auto">
+          {shown.map((path) => (
+            <li key={path} className="break-all">
+              {path}
+            </li>
+          ))}
+        </ul>
+        {files.length > PREVIEW && (
+          <button
+            onClick={() => setOpen((o) => !o)}
+            className="inline-flex items-center gap-1 text-[11px] text-safer-ice hover:underline font-mono"
+          >
+            {open ? (
+              <>
+                <ChevronDown className="h-3 w-3" /> collapse
+              </>
+            ) : (
+              <>
+                <ChevronRight className="h-3 w-3" /> show all ({hidden} more)
+              </>
+            )}
+          </button>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 
