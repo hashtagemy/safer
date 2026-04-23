@@ -3,6 +3,7 @@ import Sidebar from "./components/Sidebar";
 import TopBar from "./components/TopBar";
 import Overview from "./pages/Overview";
 import Live from "./pages/Live";
+import LiveSession from "./pages/LiveSession";
 import Agents from "./pages/Agents";
 import AgentDetail from "./pages/AgentDetail";
 import Sessions from "./pages/Sessions";
@@ -24,6 +25,7 @@ export default function App() {
             <Route path="/" element={<Navigate to="/overview" replace />} />
             <Route path="/overview" element={<Overview />} />
             <Route path="/live" element={<Live />} />
+            <Route path="/live/:sessionId" element={<LiveSession />} />
             <Route path="/agents" element={<Agents />} />
             <Route path="/agents/:agentId" element={<AgentDetail />} />
             <Route path="/sessions" element={<Sessions />} />

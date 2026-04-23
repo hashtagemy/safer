@@ -1,218 +1,179 @@
-import { useMemo, useState } from "react";
-import { useSaferRealtime, SaferEvent, BlockMsg } from "@/lib/ws";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { Radio } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/Card";
-import { Badge, HookBadge, RiskBadge } from "@/components/ui/Badge";
-import { PersonaDrawer } from "@/components/PersonaDrawer";
+import { ActiveSessionCard } from "@/components/ActiveSessionCard";
 import { BlockMomentToast } from "@/components/BlockMomentToast";
-import { cn } from "@/lib/utils";
-
-const ALL_HOOKS: string[] = [
-  "on_session_start",
-  "before_llm_call",
-  "after_llm_call",
-  "before_tool_use",
-  "after_tool_use",
-  "on_agent_decision",
-  "on_final_output",
-  "on_session_end",
-  "on_error",
-];
-
-const ALL_RISKS: string[] = ["LOW", "MEDIUM", "HIGH", "CRITICAL"];
+import { listActiveSessions, type ActiveSessionRow, WS_URL } from "@/lib/api";
+import { useSaferRealtime, type BlockMsg } from "@/lib/ws";
 
 export default function Live() {
-  const { events, verdictsByEventId, prestepByEventId, blocks, connected } =
-    useSaferRealtime(500);
-
-  const [selected, setSelected] = useState<SaferEvent | null>(null);
-  const [filterAgent, setFilterAgent] = useState<string>("");
-  const [filterHook, setFilterHook] = useState<string>("");
-  const [filterRisk, setFilterRisk] = useState<string>("");
+  const [rows, setRows] = useState<ActiveSessionRow[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [connected, setConnected] = useState(false);
+  const { blocks } = useSaferRealtime(200);
   const [toastKey, setToastKey] = useState(0);
+  const refetchTimer = useRef<number | undefined>(undefined);
 
-  const uniqueAgents = useMemo(() => {
-    const s = new Set<string>();
-    events.forEach((e) => s.add(e.agent_id));
-    return Array.from(s).sort();
-  }, [events]);
+  const refetch = useCallback(async () => {
+    try {
+      const data = await listActiveSessions();
+      setRows(data);
+      setError(null);
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }, []);
 
-  const filtered = useMemo(() => {
-    return events.filter((e) => {
-      if (filterAgent && e.agent_id !== filterAgent) return false;
-      if (filterHook && e.hook !== filterHook) return false;
-      if (filterRisk && e.risk_hint !== filterRisk) return false;
-      return true;
-    });
-  }, [events, filterAgent, filterHook, filterRisk]);
+  useEffect(() => {
+    refetch();
+  }, [refetch]);
 
-  const reversed = useMemo(() => [...filtered].reverse(), [filtered]);
+  // WebSocket listener that mutates the card list in-place for live
+  // feedback, then falls back to a debounced refetch so the backend
+  // stays authoritative on fields we can't compute client-side.
+  useEffect(() => {
+    let cancelled = false;
+    let ws: WebSocket | null = null;
+
+    const scheduleRefetch = () => {
+      if (refetchTimer.current) window.clearTimeout(refetchTimer.current);
+      refetchTimer.current = window.setTimeout(() => {
+        if (!cancelled) refetch();
+      }, 200);
+    };
+
+    const connect = () => {
+      if (cancelled) return;
+      ws = new WebSocket(`${WS_URL}/ws/stream`);
+      ws.onopen = () => setConnected(true);
+      ws.onmessage = (msg) => {
+        try {
+          const data = JSON.parse(msg.data);
+          if (data?.type !== "event") return;
+          const hook = data.hook as string;
+          const sessionId = data.session_id as string;
+          const agentId = data.agent_id as string;
+          if (hook === "on_agent_register") return; // not a runtime event
+
+          if (hook === "on_session_start" || hook === "on_session_end") {
+            scheduleRefetch();
+            return;
+          }
+
+          // Runtime event — mutate or insert the row so the card feels
+          // instant even before the refetch round-trip completes.
+          setRows((prev) => {
+            if (prev === null) return prev;
+            const idx = prev.findIndex((r) => r.session_id === sessionId);
+            if (idx === -1) {
+              // Unknown session — trigger a refetch so we get the full row.
+              scheduleRefetch();
+              return prev;
+            }
+            const row = prev[idx];
+            const nextRecent = [...row.recent_hooks, hook].slice(-20);
+            const updated: ActiveSessionRow = {
+              ...row,
+              last_event_at: data.timestamp,
+              last_event_hook: hook,
+              last_risk_hint: data.risk_hint ?? row.last_risk_hint,
+              total_steps: row.total_steps + 1,
+              recent_hooks: nextRecent,
+            };
+            // Pull the updated row to the top — newest activity first.
+            const without = prev.slice(0, idx).concat(prev.slice(idx + 1));
+            void agentId;
+            return [updated, ...without];
+          });
+        } catch {
+          /* ignore malformed frames */
+        }
+      };
+      ws.onclose = () => {
+        setConnected(false);
+        if (!cancelled) window.setTimeout(connect, 2000);
+      };
+      ws.onerror = () => ws?.close();
+    };
+    connect();
+
+    return () => {
+      cancelled = true;
+      if (refetchTimer.current) window.clearTimeout(refetchTimer.current);
+      ws?.close();
+    };
+  }, [refetch]);
 
   const latestBlock: BlockMsg | null =
     blocks.length === 0 ? null : blocks[blocks.length - 1];
   const activeToast =
     latestBlock && latestBlock.received_at >= toastKey ? latestBlock : null;
 
-  const dismissToast = () => {
-    if (latestBlock) setToastKey(latestBlock.received_at + 1);
-  };
-
-  const explainToast = (b: BlockMsg) => {
-    const match = events.find((e) => e.event_id === b.event_id);
-    if (match) setSelected(match);
-    dismissToast();
-  };
-
   return (
-    <div className="flex h-full">
-      <div className="flex-1 p-6 overflow-hidden flex flex-col">
-        <div className="flex items-baseline justify-between mb-4 gap-4 flex-wrap">
-          <div>
-            <h1 className="text-2xl font-semibold tracking-tight">Live events</h1>
-            <p className="text-sm text-muted-foreground">
-              {connected
-                ? "Streaming in real time."
-                : "Stream disconnected — retrying…"}
-            </p>
-          </div>
-          <div className="flex items-center gap-3 flex-wrap text-xs font-mono">
-            <FilterSelect
-              label="agent"
-              value={filterAgent}
-              options={uniqueAgents}
-              onChange={setFilterAgent}
-            />
-            <FilterSelect
-              label="hook"
-              value={filterHook}
-              options={ALL_HOOKS}
-              onChange={setFilterHook}
-            />
-            <FilterSelect
-              label="risk"
-              value={filterRisk}
-              options={ALL_RISKS}
-              onChange={setFilterRisk}
-            />
-            <span className="text-muted-foreground">
-              {filtered.length}/{events.length} events
-            </span>
-          </div>
+    <div className="p-6 space-y-4">
+      <header className="flex items-baseline justify-between gap-4 flex-wrap">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight">
+            Live sessions
+          </h1>
+          <p className="text-sm text-muted-foreground">
+            {connected
+              ? `Streaming in real time · ${rows?.length ?? 0} active`
+              : "Stream disconnected — retrying…"}
+          </p>
         </div>
+      </header>
 
-        <Card className="flex-1 overflow-hidden">
-          <CardContent className="p-0 h-full overflow-auto">
-            {reversed.length === 0 ? (
-              <div className="p-8 text-center text-sm text-muted-foreground font-mono">
-                {events.length === 0
-                  ? "Waiting for events. Run an instrumented agent to see activity."
-                  : "No events match the current filters."}
-              </div>
-            ) : (
-              <table className="w-full text-sm">
-                <thead className="sticky top-0 bg-card border-b border-border">
-                  <tr className="text-left text-xs text-muted-foreground font-normal">
-                    <th className="p-3 w-28">time</th>
-                    <th className="p-3 w-36">hook</th>
-                    <th className="p-3 w-20">risk</th>
-                    <th className="p-3">agent / session</th>
-                    <th className="p-3 w-24">signals</th>
-                    <th className="p-3 w-16 text-right">#</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {reversed.map((ev) => {
-                    const verdict = verdictsByEventId[ev.event_id];
-                    const block =
-                      verdict?.overall.block ||
-                      ev.gateway?.decision === "block";
-                    return (
-                      <tr
-                        key={ev.event_id}
-                        onClick={() => setSelected(ev)}
-                        className={cn(
-                          "border-b border-border/40 hover:bg-muted/40 cursor-pointer font-mono",
-                          ev.risk_hint === "CRITICAL" &&
-                            "bg-safer-critical/5 animate-pulse-critical",
-                          selected?.event_id === ev.event_id && "bg-muted/60"
-                        )}
-                      >
-                        <td className="p-3 text-muted-foreground text-xs">
-                          {new Date(ev.timestamp).toLocaleTimeString()}
-                        </td>
-                        <td className="p-3">
-                          <HookBadge hook={ev.hook} />
-                        </td>
-                        <td className="p-3">
-                          <RiskBadge risk={ev.risk_hint} />
-                        </td>
-                        <td className="p-3 text-muted-foreground truncate">
-                          {ev.agent_id} · {ev.session_id}
-                        </td>
-                        <td className="p-3">
-                          <div className="flex items-center gap-1 flex-wrap">
-                            {verdict && (
-                              <Badge variant="ice">
-                                J{verdict.active_personas.length}
-                              </Badge>
-                            )}
-                            {block && <Badge variant="critical">BLOCK</Badge>}
-                          </div>
-                        </td>
-                        <td className="p-3 text-right text-xs text-muted-foreground">
-                          {ev.sequence}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            )}
+      {error && (
+        <Card>
+          <CardContent className="p-4 text-xs text-safer-critical font-mono">
+            {error}
           </CardContent>
         </Card>
-      </div>
+      )}
 
-      <PersonaDrawer
-        event={selected}
-        verdict={selected ? verdictsByEventId[selected.event_id] : undefined}
-        prestep={selected ? prestepByEventId[selected.event_id] : undefined}
-        onClose={() => setSelected(null)}
-      />
+      {rows === null && !error && (
+        <Card>
+          <CardContent className="p-6 text-sm text-muted-foreground font-mono">
+            Loading active sessions…
+          </CardContent>
+        </Card>
+      )}
+
+      {rows !== null && rows.length === 0 && (
+        <Card>
+          <CardContent className="p-8 text-center space-y-3">
+            <Radio className="h-8 w-8 mx-auto text-muted-foreground" />
+            <div className="text-sm font-semibold">No active sessions</div>
+            <p className="text-xs text-muted-foreground font-mono max-w-md mx-auto">
+              Start an instrumented agent to see live activity here. Cards appear
+              automatically when a session begins and disappear when it ends.
+            </p>
+          </CardContent>
+        </Card>
+      )}
+
+      {rows !== null && rows.length > 0 && (
+        <div className="space-y-3">
+          {rows.map((r) => (
+            <ActiveSessionCard key={r.session_id} row={r} />
+          ))}
+        </div>
+      )}
 
       <BlockMomentToast
         block={activeToast}
-        onExplain={explainToast}
-        onDismiss={dismissToast}
+        onExplain={() => {
+          if (latestBlock) {
+            window.location.href = `/live/${encodeURIComponent(
+              latestBlock.session_id
+            )}`;
+          }
+        }}
+        onDismiss={() => {
+          if (latestBlock) setToastKey(latestBlock.received_at + 1);
+        }}
       />
     </div>
-  );
-}
-
-function FilterSelect({
-  label,
-  value,
-  options,
-  onChange,
-}: {
-  label: string;
-  value: string;
-  options: string[];
-  onChange: (v: string) => void;
-}) {
-  return (
-    <label className="flex items-center gap-1">
-      <span className="text-muted-foreground">{label}</span>
-      <select
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        className="rounded-md border border-border bg-background px-2 py-1 text-xs font-mono focus:outline-none focus:ring-1 focus:ring-safer-ice"
-      >
-        <option value="">all</option>
-        {options.map((o) => (
-          <option key={o} value={o}>
-            {o}
-          </option>
-        ))}
-      </select>
-    </label>
   );
 }

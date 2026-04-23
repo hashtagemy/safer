@@ -34,23 +34,32 @@ async def upsert_agent(
     framework: str | None = None,
     metadata: dict[str, Any] | None = None,
 ) -> None:
+    """Insert a bare agent row or refresh `last_seen_at` for an existing one.
+
+    When `name` is not given we fall back to `agent_id` on first insert,
+    but on UPDATE we leave the existing name alone so a richer name set
+    earlier (e.g. by `ingest_agent_register`) isn't clobbered.
+    """
     async with get_db() as db:
         await db.execute(
             """
             INSERT INTO agents (agent_id, name, framework, created_at, last_seen_at, metadata_json)
-            VALUES (?, ?, ?, ?, ?, ?)
+            VALUES (?, COALESCE(?, ?), ?, ?, ?, ?)
             ON CONFLICT(agent_id) DO UPDATE SET
-                name = COALESCE(excluded.name, agents.name),
-                framework = COALESCE(excluded.framework, agents.framework),
+                name = COALESCE(?, agents.name),
+                framework = COALESCE(?, agents.framework),
                 last_seen_at = excluded.last_seen_at
             """,
             (
                 agent_id,
-                name or agent_id,
+                name,
+                agent_id,
                 framework,
                 _utcnow_iso(),
                 _utcnow_iso(),
                 json.dumps(metadata or {}),
+                name,
+                framework,
             ),
         )
         await db.commit()
