@@ -30,7 +30,7 @@ from ..storage.db import get_db
 
 log = logging.getLogger("safer.reconstructor")
 
-RECON_MODEL = os.environ.get("SAFER_RECON_MODEL", "claude-opus-4-7")
+RECON_MODEL = os.environ.get("SAFER_RECON_MODEL", "claude-sonnet-4-6")
 MAX_TOKENS = int(os.environ.get("SAFER_RECON_MAX_TOKENS", "2000"))
 
 _PRICING: dict[str, tuple[float, float, float, float]] = {

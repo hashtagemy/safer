@@ -26,7 +26,7 @@ from ..storage.db import get_db
 
 log = logging.getLogger("safer.quality.reviewer")
 
-QUALITY_MODEL = os.environ.get("SAFER_QUALITY_MODEL", "claude-opus-4-7")
+QUALITY_MODEL = os.environ.get("SAFER_QUALITY_MODEL", "claude-sonnet-4-6")
 MAX_TOKENS = int(os.environ.get("SAFER_QUALITY_MAX_TOKENS", "1500"))
 
 _PRICING: dict[str, tuple[float, float, float, float]] = {

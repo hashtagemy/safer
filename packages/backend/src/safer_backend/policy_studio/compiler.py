@@ -32,7 +32,7 @@ from ..models.policies import CompiledPolicy
 
 log = logging.getLogger("safer.policy_studio.compiler")
 
-COMPILER_MODEL = os.environ.get("SAFER_POLICY_MODEL", "claude-opus-4-7")
+COMPILER_MODEL = os.environ.get("SAFER_POLICY_MODEL", "claude-sonnet-4-6")
 MAX_TOKENS = int(os.environ.get("SAFER_POLICY_MAX_TOKENS", "1500"))
 
 
