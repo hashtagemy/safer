@@ -41,7 +41,12 @@ log = logging.getLogger("safer.agents_api")
 
 router = APIRouter(prefix="/v1/agents", tags=["agents"])
 
-SCAN_TIMEOUT_SECONDS = 30.0
+# 5 minutes — wide enough to absorb the Managed Agents path (container
+# spin-up + bash/grep traversal + 3-persona Opus pass), which typically
+# lands in 60-150s. Sub-agent path is ~5s; the larger ceiling does not
+# affect it. A proper fix (background task + WebSocket signal) is
+# tracked as future work.
+SCAN_TIMEOUT_SECONDS = 300.0
 
 
 class ScanRequest(BaseModel):

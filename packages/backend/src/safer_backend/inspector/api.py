@@ -12,7 +12,10 @@ from .orchestrator import inspect
 
 router = APIRouter(prefix="/v1/agents", tags=["inspector"])
 
-INSPECT_TIMEOUT_SECONDS = 10.0
+# Matches the ceiling used by POST /v1/agents/{id}/scan — Managed
+# Agents sessions typically need 60-150s end-to-end; sub-agent path
+# is fast enough that the higher ceiling is harmless.
+INSPECT_TIMEOUT_SECONDS = 300.0
 
 
 class InspectRequest(BaseModel):
