@@ -17,7 +17,32 @@ dependencies = [
 claude = ["anthropic>=0.40"]
 langchain = ["langchain>=0.2", "langchain-core>=0.2"]
 openai = ["openai>=1.40"]
-all = ["anthropic>=0.40", "langchain>=0.2", "langchain-core>=0.2", "openai>=1.40"]
+google-adk = ["google-adk>=1.0"]
+strands = ["strands-agents>=1.0"]
+otel = [
+    "opentelemetry-sdk>=1.28",
+    "opentelemetry-exporter-otlp-proto-http>=1.28",
+]
+otel-anthropic = [
+    "opentelemetry-sdk>=1.28",
+    "opentelemetry-exporter-otlp-proto-http>=1.28",
+    "opentelemetry-instrumentation-anthropic>=0.45b0",
+]
+otel-openai = [
+    "opentelemetry-sdk>=1.28",
+    "opentelemetry-exporter-otlp-proto-http>=1.28",
+    "opentelemetry-instrumentation-openai>=0.45b0",
+]
+all = [
+    "anthropic>=0.40",
+    "langchain>=0.2",
+    "langchain-core>=0.2",
+    "openai>=1.40",
+    "google-adk>=1.0",
+    "strands-agents>=1.0",
+    "opentelemetry-sdk>=1.28",
+    "opentelemetry-exporter-otlp-proto-http>=1.28",
+]
 dev = ["pytest>=8.0", "pytest-asyncio>=0.23", "ruff>=0.5"]
 
 [build-system]
