@@ -236,7 +236,11 @@ async def _run_session_to_completion(
 
     deadline = time.monotonic() + timeout_s
 
-    async with client.beta.sessions.events.stream(session_id) as stream:
+    # Anthropic async SDK: events.stream(...) is itself `async`, so we
+    # have to await the coroutine before entering its context manager.
+    # The sync docs show `with client.beta... .stream(id) as s:` — the
+    # async form needs the extra `await`.
+    async with await client.beta.sessions.events.stream(session_id) as stream:
         await client.beta.sessions.events.send(
             session_id,
             events=[
