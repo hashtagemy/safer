@@ -167,6 +167,9 @@ def _make_handler_cls() -> type:
             session_id: str | None = None,
             client: SaferClient | None = None,
         ) -> None:
+            from ._bootstrap import ensure_runtime
+
+            ensure_runtime(agent_id, agent_name)
             super().__init__()
             self.agent_id = agent_id
             self.agent_name = agent_name or agent_id

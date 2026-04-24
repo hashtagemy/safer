@@ -145,10 +145,12 @@ def instrument(
 
 
 def _caller_file() -> str | None:
-    """Best-effort: the file of whoever called instrument().
+    """Best-effort: the file of whoever triggered instrument().
 
-    Walks the call stack past this module so examples/apps see their
-    own entry point, not our package internals.
+    Walks the call stack past any `safer/` package frame (including
+    adapter constructors and `_bootstrap.ensure_runtime`) so the
+    onboarding snapshot anchors on the user's entry point, not our
+    internals.
     """
     try:
         stack = inspect.stack()
@@ -158,9 +160,11 @@ def _caller_file() -> str | None:
         filename = frame.filename
         if not filename:
             continue
-        if "/safer/instrument.py" in filename or filename.endswith("safer/instrument.py"):
-            continue
-        if "/safer/__init__.py" in filename:
+        # Skip any frame inside the safer package itself.
+        normalized = filename.replace("\\", "/")
+        if "/safer/" in normalized and (
+            normalized.endswith(".py") or normalized.endswith(".pyc")
+        ):
             continue
         return filename
     return None
@@ -170,36 +174,47 @@ def _register_adapters(client: SaferClient) -> str:
     """Detect installed frameworks and register matching adapters.
 
     Returns a short framework label suitable for the on_agent_register
-    payload (`anthropic`, `langchain`, `openai`, or `custom`). When
-    multiple are installed, the first one detected wins — order matches
-    the bundled adapter list.
+    payload. Priority order matches SAFER's "framework vs client-proxy
+    vs otel-bridge" story — framework-native adapters (LangChain,
+    Google ADK, Strands) win over raw LLM SDKs (anthropic, openai), and
+    OpenTelemetry is the fallback label when only OTel is installed.
+
+    Possible labels: `langchain`, `google-adk`, `strands`, `anthropic`,
+    `openai`, `otel-bridge`, `custom`.
     """
+    import importlib.util
+
     detected: list[str] = []
 
-    try:
-        import anthropic  # noqa: F401
+    # Framework-native first — these imply a native hook adapter is in
+    # the picture (SaferCallbackHandler, SaferAdkPlugin, SaferHookProvider).
+    for label, module in (
+        ("langchain", "langchain"),
+        ("google-adk", "google.adk"),
+        ("strands", "strands"),
+    ):
+        if importlib.util.find_spec(module) is not None:
+            detected.append(label)
 
-        detected.append("anthropic")
-    except ImportError:
-        pass
+    # Raw LLM SDKs — usually paired with the OTel bridge or wrap_* shims.
+    for label, module in (
+        ("anthropic", "anthropic"),
+        ("openai", "openai"),
+    ):
+        if importlib.util.find_spec(module) is not None:
+            detected.append(label)
 
-    try:
-        import langchain  # noqa: F401
-
-        detected.append("langchain")
-    except ImportError:
-        pass
-
-    try:
-        import openai  # noqa: F401
-
-        detected.append("openai")
-    except ImportError:
-        pass
+    # OpenTelemetry as a fallback label when the user is likely using
+    # the OTel bridge path but none of the framework-native deps above
+    # are in the picture.
+    has_otel = importlib.util.find_spec("opentelemetry.sdk") is not None
 
     if detected:
         log.info("SAFER: detected frameworks: %s", ", ".join(detected))
         return detected[0]
+    if has_otel:
+        log.info("SAFER: only OpenTelemetry detected; label = otel-bridge")
+        return "otel-bridge"
     log.info(
         "SAFER: no framework detected; use safer.track_event() for manual instrumentation"
     )

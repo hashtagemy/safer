@@ -84,15 +84,9 @@ def test_openai_wrap_records_on_error(recording_client):
 
 # ---------- beta stubs ----------
 
-
-def test_google_adk_stub_is_noop_with_warning(caplog):
-    from safer.adapters.google_adk import wrap_adk
-
-    sentinel = object()
-    with caplog.at_level(logging.WARNING, logger="safer.adapters.google_adk"):
-        out = wrap_adk(sentinel, agent_id="x")
-    assert out is sentinel
-    assert any("google_adk" in rec.message for rec in caplog.records)
+# Note: Google ADK used to be a no-op stub; it is now a real adapter.
+# Its coverage lives in test_adapters_google_adk.py (full Plugin flow
+# after Faz 33.5).
 
 
 def test_bedrock_stub_is_noop_with_warning(caplog):

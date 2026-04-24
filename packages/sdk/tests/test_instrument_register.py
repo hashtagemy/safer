@@ -128,7 +128,15 @@ def test_second_instrument_call_carries_detected_framework(
     registers = [e for e in captured if isinstance(e, OnAgentRegisterPayload)]
     assert len(registers) == 2
     assert registers[0].framework == registers[1].framework
-    assert registers[1].framework in {"anthropic", "langchain", "openai", "custom"}
+    assert registers[1].framework in {
+        "anthropic",
+        "langchain",
+        "openai",
+        "google-adk",
+        "strands",
+        "otel-bridge",
+        "custom",
+    }
 
 
 def test_register_payload_carries_framework_and_prompt(
@@ -149,4 +157,92 @@ def test_register_payload_carries_framework_and_prompt(
     evt = registers[0]
     assert evt.system_prompt == "You are a helpful test agent."
     # framework should be one of the known values; pytest env likely has anthropic
-    assert evt.framework in {"anthropic", "langchain", "openai", "custom"}
+    assert evt.framework in {
+        "anthropic",
+        "langchain",
+        "openai",
+        "google-adk",
+        "strands",
+        "otel-bridge",
+        "custom",
+    }
+
+
+# ---------- framework auto-detection coverage ----------
+
+
+def test_detects_google_adk_when_installed() -> None:
+    """If google.adk is importable, _register_adapters must report it."""
+    import importlib.util
+
+    if importlib.util.find_spec("google.adk") is None:
+        pytest.skip("google-adk not installed in this environment")
+
+    from safer.instrument import _register_adapters
+
+    class _DummyClient:
+        pass
+
+    label = _register_adapters(_DummyClient())
+    # Framework-native detections win over raw-LLM SDKs, so when ADK is
+    # installed the label must be at least in the detected set.
+    assert label in {
+        "langchain",
+        "google-adk",
+        "strands",
+    }, f"unexpected label with ADK installed: {label!r}"
+
+
+def test_detects_strands_when_installed() -> None:
+    import importlib.util
+
+    if importlib.util.find_spec("strands") is None:
+        pytest.skip("strands-agents not installed in this environment")
+
+    from safer.instrument import _register_adapters
+
+    class _DummyClient:
+        pass
+
+    label = _register_adapters(_DummyClient())
+    assert label in {
+        "langchain",
+        "google-adk",
+        "strands",
+    }
+
+
+def test_otel_only_environment_returns_otel_bridge_label(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """With only opentelemetry.sdk importable (and no LangChain / ADK /
+    Strands / Anthropic / OpenAI), the label must fall through to
+    `otel-bridge` — not `custom`."""
+    import importlib.util
+
+    original_find_spec = importlib.util.find_spec
+
+    def _fake_find_spec(name: str, *args, **kwargs):
+        # Hide every framework-native + raw-LLM SDK.
+        hidden = {
+            "anthropic",
+            "openai",
+            "langchain",
+            "google.adk",
+            "strands",
+        }
+        if name in hidden:
+            return None
+        return original_find_spec(name, *args, **kwargs)
+
+    monkeypatch.setattr(importlib.util, "find_spec", _fake_find_spec)
+
+    from safer.instrument import _register_adapters
+
+    class _DummyClient:
+        pass
+
+    # opentelemetry.sdk is installed (it's a transitive backend dep).
+    assert original_find_spec("opentelemetry.sdk") is not None
+    label = _register_adapters(_DummyClient())
+    assert label == "otel-bridge"

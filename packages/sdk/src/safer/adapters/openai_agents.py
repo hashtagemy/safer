@@ -1,10 +1,15 @@
-"""Partial OpenAI / OpenAI Agents SDK adapter.
+"""Partial OpenAI / OpenAI Agents SDK client-proxy adapter.
 
 Covers the two highest-value hooks — `before_llm_call` and
 `after_llm_call` — by proxying the client's `chat.completions.create`
 and `responses.create` methods. Tool-use and agent-decision hooks emit
 a one-time "coming soon" warning; users can bridge them by invoking
 `safer.track_event()` manually for now.
+
+**For zero-config full observability on raw OpenAI code, prefer the
+OTel bridge** (`safer.adapters.otel.configure_otel_bridge`) — it drops
+in `opentelemetry-instrumentation-openai` which emits all nine SAFER
+hooks via GenAI span parsing on the backend with no manual helpers.
 
 Usage:
 
@@ -163,6 +168,9 @@ class _OpenAIAdapter:
         agent_name: str,
         session_id: str | None,
     ) -> None:
+        from ._bootstrap import ensure_runtime
+
+        ensure_runtime(agent_id, agent_name)
         self._inner = inner
         self.agent_id = agent_id
         self.agent_name = agent_name

@@ -1,8 +1,18 @@
-"""Claude / Anthropic adapter.
+"""Claude / Anthropic client-proxy adapter.
 
-Wraps `anthropic.Anthropic` (or `AsyncAnthropic`) so every `messages.create`
-emits `before_llm_call` + `after_llm_call` hooks automatically. Users call
-the tracker's helper methods for tool use, agent decisions, and final output.
+Wraps `anthropic.Anthropic` (or `AsyncAnthropic`) so every
+`messages.create` emits `before_llm_call` + `after_llm_call` hooks
+automatically. The raw Anthropic SDK has no native hook surface, so the
+remaining SAFER lifecycle hooks (`before_tool_use`, `after_tool_use`,
+`on_agent_decision`, `on_final_output`, `on_session_end`, `on_error`)
+must be emitted via the tracker's helper methods
+(`tracker.before_tool_use(...)`, `tracker.final_output(...)`, ...).
+
+**For zero-config full observability on raw Anthropic code, prefer the
+OTel bridge** (`safer.adapters.otel.configure_otel_bridge`) — it drops
+in `opentelemetry-instrumentation-anthropic` which emits all nine
+SAFER hooks (via GenAI span parsing on the backend) with no manual
+helper calls.
 
 Usage:
 
@@ -120,6 +130,9 @@ class AnthropicTracker:
         session_id: str | None = None,
         safer: SaferClient | None = None,
     ) -> None:
+        from ._bootstrap import ensure_runtime
+
+        ensure_runtime(agent_id, agent_name)
         self._client = client
         self.agent_id = agent_id
         self.agent_name = agent_name or agent_id
