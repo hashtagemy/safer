@@ -246,6 +246,7 @@ def _build_findings(
                     evidence=list(verdict.evidence),
                     reproduction_steps=[],
                     recommended_mitigation=verdict.recommended_mitigation,
+                    persona=persona,
                 )
             )
 

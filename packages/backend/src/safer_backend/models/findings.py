@@ -8,6 +8,8 @@ from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
+from .verdicts import PersonaName
+
 
 class Severity(str, Enum):
     LOW = "LOW"
@@ -50,5 +52,9 @@ class Finding(BaseModel):
     file_path: str | None = Field(
         default=None,
         description="Relative file path when a finding is scoped to a project scan",
+    )
+    persona: PersonaName | None = Field(
+        default=None,
+        description="Which Judge persona raised this finding; None for deterministic (pattern/AST) or Gateway findings.",
     )
     created_at: datetime = Field(default_factory=_utcnow)

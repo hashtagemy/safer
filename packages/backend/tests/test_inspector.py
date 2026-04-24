@@ -311,6 +311,13 @@ async def test_inspect_with_fake_persona_review(monkeypatch, reset_judge_client)
     # Persona flag adds a finding on top of the pattern match.
     credential_findings = [f for f in report.findings if f.flag == "credential_hardcoded"]
     assert len(credential_findings) >= 2
+    # Persona-sourced finding carries its persona; deterministic
+    # (pattern-matched) finding carries `persona=None`.
+    persona_sourced = [f for f in credential_findings if f.persona is not None]
+    deterministic = [f for f in credential_findings if f.persona is None]
+    assert len(persona_sourced) >= 1
+    assert len(deterministic) >= 1
+    assert persona_sourced[0].persona.value == "security_auditor"
     # One Claude call total (persona review).
     assert len(fake.calls) == 1
     # Prompt cache requested.
