@@ -14,7 +14,9 @@ export interface BlockMomentToastProps {
 /**
  * Bottom-right toast that surfaces the most recent gateway/judge block
  * signal. Auto-dismisses after 10s. The "Explain" button asks the host
- * page to open the matching event in the PersonaDrawer.
+ * page to focus the matching event — LiveSession opens the PersonaDrawer
+ * side-panel; SessionDetail expands the inline EventDetailPanel under the
+ * timeline card.
  */
 export function BlockMomentToast({
   block,

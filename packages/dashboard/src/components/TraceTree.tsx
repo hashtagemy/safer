@@ -190,8 +190,8 @@ export function TraceTree({
       <CardHeader>
         <CardTitle className="text-base">Trace tree</CardTitle>
         <p className="text-xs text-muted-foreground font-mono">
-          LLM and tool calls paired by sequence. Click a node to open the
-          persona drawer on that event.
+          LLM and tool calls paired by sequence. Click a node to expand that
+          event's detail in the timeline above.
         </p>
       </CardHeader>
       <CardContent>
