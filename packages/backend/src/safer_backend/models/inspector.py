@@ -135,3 +135,7 @@ class InspectorReport(BaseModel):
     duration_ms: int = 0
     persona_review_skipped: bool = False
     persona_review_error: str | None = None
+    persona_review_mode: str | None = Field(
+        default=None,
+        description="'managed' for Claude Managed Agents, 'subagent' for the legacy single-call path, 'managed_fallback_subagent' when managed failed and fell back.",
+    )

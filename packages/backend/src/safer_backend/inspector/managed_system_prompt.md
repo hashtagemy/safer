@@ -81,8 +81,10 @@ This builds a living, organization-wide security knowledge base.
    `score < 40`.
 5. Write NEW patterns to memory (step above).
 6. Write the strict-JSON report to `/workspace/output/report.json`.
-7. Stop — don't emit anything to the final chat message; the caller
-   reads the JSON file.
+7. Emit the **same JSON** as your final assistant message — no prose,
+   no markdown fence, just the JSON object. The caller parses this
+   final message to obtain the report. (The file copy in
+   `/workspace/output/report.json` is kept for audit/debug purposes.)
 
 ## Output JSON schema
 

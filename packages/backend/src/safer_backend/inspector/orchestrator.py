@@ -74,10 +74,11 @@ async def inspect(
     # --- Layer 3: 3-persona Judge (INSPECTOR mode) ---
     persona_verdicts: dict[PersonaName, PersonaVerdict] = {}
     persona_review_error: str | None = None
+    persona_review_mode: str | None = None
     review_skipped = skip_persona_review
     if not skip_persona_review:
         try:
-            verdict: Verdict = await persona_review(
+            verdict, persona_review_mode = await _review_persona_with_fallback(
                 agent_id=agent_id,
                 source=source,
                 system_prompt=system_prompt,
@@ -132,7 +133,70 @@ async def inspect(
         duration_ms=duration_ms,
         persona_review_skipped=review_skipped,
         persona_review_error=persona_review_error,
+        persona_review_mode=persona_review_mode,
     )
+
+
+async def _review_persona_with_fallback(
+    *,
+    agent_id: str,
+    source: str,
+    system_prompt: str,
+    tools: list[ToolSpec],
+    ast_summary: ASTSummary,
+    pattern_matches: list[PatternMatch],
+    active_policies: list[dict] | None,
+) -> tuple[Verdict, str]:
+    """Try Managed Agents first; fall back to the single-call sub-agent.
+
+    Returns (verdict, persona_review_mode) where mode is one of:
+      - "managed"                     — Managed Agents succeeded
+      - "subagent"                    — Managed Agents unavailable at import
+      - "managed_fallback_subagent"   — Managed Agents failed mid-flight
+    """
+    # Localized import so the legacy path still works if the managed
+    # module has a transient import error (e.g. SDK missing in CI).
+    try:
+        from .managed import InspectorManagedError, review_managed
+    except Exception as e:
+        log.info("inspector managed path unavailable, using subagent: %s", e)
+        verdict = await persona_review(
+            agent_id=agent_id,
+            source=source,
+            system_prompt=system_prompt,
+            tools=tools,
+            ast_summary=ast_summary,
+            pattern_matches=pattern_matches,
+            active_policies=active_policies,
+        )
+        return verdict, "subagent"
+
+    try:
+        verdict = await review_managed(
+            agent_id=agent_id,
+            source=source,
+            system_prompt=system_prompt,
+            tools=tools,
+            ast_summary=ast_summary,
+            pattern_matches=pattern_matches,
+            active_policies=active_policies,
+        )
+        return verdict, "managed"
+    except InspectorManagedError as e:
+        log.warning("Managed Inspector failed, falling back to sub-agent: %s", e)
+    except Exception as e:  # pragma: no cover — defensive
+        log.exception("Managed Inspector unexpected error, falling back: %s", e)
+
+    verdict = await persona_review(
+        agent_id=agent_id,
+        source=source,
+        system_prompt=system_prompt,
+        tools=tools,
+        ast_summary=ast_summary,
+        pattern_matches=pattern_matches,
+        active_policies=active_policies,
+    )
+    return verdict, "managed_fallback_subagent"
 
 
 def _build_findings(
@@ -272,10 +336,11 @@ async def inspect_project(
 
     persona_verdicts: dict[PersonaName, PersonaVerdict] = {}
     persona_review_error: str | None = None
+    persona_review_mode: str | None = None
     review_skipped = skip_persona_review
     if not skip_persona_review:
         try:
-            verdict: Verdict = await persona_review_project(
+            verdict, persona_review_mode = await _review_project_with_fallback(
                 agent_id=agent_id,
                 files=files,
                 system_prompt=system_prompt,
@@ -321,4 +386,69 @@ async def inspect_project(
         duration_ms=duration_ms,
         persona_review_skipped=review_skipped,
         persona_review_error=persona_review_error,
+        persona_review_mode=persona_review_mode,
     )
+
+
+async def _review_project_with_fallback(
+    *,
+    agent_id: str,
+    files: list[tuple[str, str]],
+    system_prompt: str,
+    tools: list[ToolSpec],
+    ast_summary: ASTSummary,
+    pattern_matches: list[PatternMatch],
+    active_policies: list[dict] | None,
+) -> tuple[Verdict, str]:
+    """Project-scan variant of the managed/fallback switch.
+
+    The managed path receives a single concatenated digest of every
+    file (same shape `persona_review_project` uses when falling back)
+    so the Managed Agent can still grep/read individual sections in its
+    sandbox.
+    """
+    digest = "\n\n".join(
+        f"# ===== {path} =====\n{src.rstrip()}\n" for path, src in files
+    )
+
+    try:
+        from .managed import InspectorManagedError, review_managed
+    except Exception as e:
+        log.info("inspector managed path unavailable, using subagent: %s", e)
+        verdict = await persona_review_project(
+            agent_id=agent_id,
+            files=files,
+            system_prompt=system_prompt,
+            tools=tools,
+            ast_summary=ast_summary,
+            pattern_matches=pattern_matches,
+            active_policies=active_policies,
+        )
+        return verdict, "subagent"
+
+    try:
+        verdict = await review_managed(
+            agent_id=agent_id,
+            source=digest,
+            system_prompt=system_prompt,
+            tools=tools,
+            ast_summary=ast_summary,
+            pattern_matches=pattern_matches,
+            active_policies=active_policies,
+        )
+        return verdict, "managed"
+    except InspectorManagedError as e:
+        log.warning("Managed Inspector failed, falling back to sub-agent: %s", e)
+    except Exception as e:  # pragma: no cover — defensive
+        log.exception("Managed Inspector unexpected error, falling back: %s", e)
+
+    verdict = await persona_review_project(
+        agent_id=agent_id,
+        files=files,
+        system_prompt=system_prompt,
+        tools=tools,
+        ast_summary=ast_summary,
+        pattern_matches=pattern_matches,
+        active_policies=active_policies,
+    )
+    return verdict, "managed_fallback_subagent"
