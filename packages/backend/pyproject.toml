@@ -16,6 +16,9 @@ dependencies = [
     "aiosqlite>=0.20",
     "python-multipart>=0.0.9",
     "safer-sdk",
+    "opentelemetry-proto>=1.28",
+    "opentelemetry-sdk>=1.28",
+    "opentelemetry-semantic-conventions>=0.49b0",
 ]
 
 [project.optional-dependencies]
