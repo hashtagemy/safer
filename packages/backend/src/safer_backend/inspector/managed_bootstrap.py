@@ -19,7 +19,9 @@ import logging
 import os
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
+
+import httpx
 
 from ..storage.db import get_db
 
@@ -120,26 +122,75 @@ async def ensure_inspector_agent(
     return agent.id
 
 
+async def _raw_post_memory_store(payload: dict[str, Any]) -> dict[str, Any]:
+    """POST /v1/memory_stores via raw httpx.
+
+    The anthropic Python SDK (0.97.0 as of 2026-04-24) does not yet
+    expose `beta.memory_stores`, so we hit the REST endpoint directly.
+    Same auth + beta header as the SDK would send.
+    """
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        raise ManagedBootstrapError("ANTHROPIC_API_KEY not set")
+
+    headers = {
+        "x-api-key": api_key,
+        "anthropic-version": "2023-06-01",
+        "anthropic-beta": BETA_HEADER,
+        "content-type": "application/json",
+    }
+
+    async with httpx.AsyncClient(timeout=30.0) as http:
+        response = await http.post(
+            "https://api.anthropic.com/v1/memory_stores",
+            json=payload,
+            headers=headers,
+        )
+    if response.status_code // 100 != 2:
+        raise ManagedBootstrapError(
+            f"memory_stores POST returned {response.status_code}: "
+            f"{response.text[:500]}"
+        )
+    return response.json()
+
+
 async def ensure_memory_store(
     client: "AsyncAnthropic | None" = None,
 ) -> str:
-    """Return the shared Inspector memory store ID, creating on first use."""
+    """Return the shared Inspector memory store ID, creating on first use.
+
+    Uses raw HTTP because `client.beta.memory_stores` is not yet in the
+    anthropic Python SDK. The `client` parameter is retained for
+    signature compatibility with the other ensure_* helpers (and so
+    tests can inject a fake HTTP path).
+    """
     cfg = await _read_config()
     if cfg.get(_CONFIG_KEYS["store_id"]):
         return cfg[_CONFIG_KEYS["store_id"]]
 
-    client = client or _beta_client()
     try:
-        store = await client.beta.memory_stores.create(
-            name=MEMORY_STORE_NAME,
-            description=MEMORY_STORE_DESCRIPTION,
+        data = await _raw_post_memory_store(
+            {
+                "name": MEMORY_STORE_NAME,
+                "description": MEMORY_STORE_DESCRIPTION,
+            }
         )
+    except ManagedBootstrapError:
+        raise
     except Exception as e:
-        raise ManagedBootstrapError(f"memory_stores.create failed: {e}") from e
+        raise ManagedBootstrapError(
+            f"memory_stores POST failed: {type(e).__name__}: {e}"
+        ) from e
 
-    await _write_config(_CONFIG_KEYS["store_id"], store.id)
-    log.info("created memory store id=%s", store.id)
-    return store.id
+    store_id = data.get("id")
+    if not store_id:
+        raise ManagedBootstrapError(
+            f"memory_stores response missing id: {data!r}"
+        )
+
+    await _write_config(_CONFIG_KEYS["store_id"], store_id)
+    log.info("created memory store id=%s", store_id)
+    return store_id
 
 
 async def ensure_environment(

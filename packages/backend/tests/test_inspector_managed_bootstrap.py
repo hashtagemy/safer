@@ -34,15 +34,6 @@ class _FakeAgents:
         return SimpleNamespace(id="agent_abc123", version=1)
 
 
-class _FakeMemoryStores:
-    def __init__(self):
-        self.calls = []
-
-    async def create(self, **kwargs):
-        self.calls.append(kwargs)
-        return SimpleNamespace(id="memstore_abc123")
-
-
 class _FakeEnvironments:
     def __init__(self):
         self.calls = []
@@ -55,7 +46,6 @@ class _FakeEnvironments:
 class _FakeBeta:
     def __init__(self):
         self.agents = _FakeAgents()
-        self.memory_stores = _FakeMemoryStores()
         self.environments = _FakeEnvironments()
 
 
@@ -64,8 +54,29 @@ class _FakeClient:
         self.beta = _FakeBeta()
 
 
+@pytest.fixture
+def fake_memory_store_http(monkeypatch):
+    """Replace the raw-HTTP memory-store creator with a capture.
+
+    Matches the real function's signature: takes a payload dict and
+    returns a dict shaped like the Anthropic API response.
+    """
+    calls: list[dict] = []
+
+    async def _fake(payload):
+        calls.append(payload)
+        return {"id": "memstore_abc123", "name": payload.get("name")}
+
+    import safer_backend.inspector.managed_bootstrap as mb_pre
+
+    monkeypatch.setattr(mb_pre, "_raw_post_memory_store", _fake)
+    return calls
+
+
 @pytest.mark.asyncio
-async def test_ensure_all_creates_then_caches(isolated_db, monkeypatch):
+async def test_ensure_all_creates_then_caches(
+    isolated_db, monkeypatch, fake_memory_store_http
+):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
     await init_db(isolated_db)
 
@@ -74,10 +85,18 @@ async def test_ensure_all_creates_then_caches(isolated_db, monkeypatch):
 
     importlib.reload(mb)
 
+    # Reload re-imported the module, so the fixture's monkeypatch is
+    # against the pre-reload module object. Re-apply on the fresh one.
+    async def _fake(payload):
+        fake_memory_store_http.append(payload)
+        return {"id": "memstore_abc123", "name": payload.get("name")}
+
+    monkeypatch.setattr(mb, "_raw_post_memory_store", _fake)
+
     client = _FakeClient()
 
     agent_id = await mb.ensure_inspector_agent(client)
-    store_id = await mb.ensure_memory_store(client)
+    store_id = await mb.ensure_memory_store()
     env_id = await mb.ensure_environment(client)
 
     assert agent_id == "agent_abc123"
@@ -86,12 +105,12 @@ async def test_ensure_all_creates_then_caches(isolated_db, monkeypatch):
 
     # Second pass: no new API calls, same IDs.
     agent_id2 = await mb.ensure_inspector_agent(client)
-    store_id2 = await mb.ensure_memory_store(client)
+    store_id2 = await mb.ensure_memory_store()
     env_id2 = await mb.ensure_environment(client)
 
     assert (agent_id2, store_id2, env_id2) == (agent_id, store_id, env_id)
     assert len(client.beta.agents.calls) == 1
-    assert len(client.beta.memory_stores.calls) == 1
+    assert len(fake_memory_store_http) == 1
     assert len(client.beta.environments.calls) == 1
 
 
@@ -131,3 +150,38 @@ async def test_missing_api_key_raises(isolated_db, monkeypatch):
     with pytest.raises(mb.ManagedBootstrapError):
         # No client injected -> tries to build one from env -> fails.
         await mb.ensure_inspector_agent(client=None)
+
+
+@pytest.mark.asyncio
+async def test_memory_store_post_raises_on_non_2xx(isolated_db, monkeypatch):
+    """Real httpx path: a 4xx should surface as ManagedBootstrapError."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    await init_db(isolated_db)
+
+    import importlib
+    import safer_backend.inspector.managed_bootstrap as mb
+
+    importlib.reload(mb)
+
+    class _FakeAsyncClient:
+        def __init__(self, *a, **kw):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def post(self, *a, **kw):
+            return SimpleNamespace(
+                status_code=403,
+                text='{"error":{"type":"forbidden","message":"no beta"}}',
+                json=lambda: {},
+            )
+
+    monkeypatch.setattr(mb.httpx, "AsyncClient", _FakeAsyncClient)
+
+    with pytest.raises(mb.ManagedBootstrapError) as excinfo:
+        await mb.ensure_memory_store()
+    assert "403" in str(excinfo.value)
