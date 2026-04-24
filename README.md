@@ -6,7 +6,7 @@
 
 [![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/downloads/)
-[![Tests](https://img.shields.io/badge/tests-185%20passing-brightgreen.svg)](#testing)
+[![Tests](https://img.shields.io/badge/tests-281%20passing-brightgreen.svg)](#testing)
 [![Claude Hackathon 2026](https://img.shields.io/badge/Claude%20Hackathon-2026-purple.svg)](https://www.cerebralvalley.ai/)
 
 AI agents are shipping faster than anyone can audit them. SAFER gives
@@ -79,7 +79,7 @@ SAFER is opinionated about the shape of that missing layer:
 | **Assure** | Risk score + OWASP-aligned findings | **Red-Team Squad** — 3-stage adversarial evaluation (Strategist → Attacker → Analyst) mapped to OWASP LLM Top 10 | Block Moment toast with explainability drawer | **Session Report** — 7-category health card + **Compliance Pack** (GDPR / SOC 2 / OWASP LLM) in PDF / HTML / JSON |
 
 Everything above is wired end-to-end in the current release and
-verified by the 185-test suite.
+verified by the 281-test suite.
 
 ---
 
@@ -221,108 +221,161 @@ docker compose down -v    # -v also wipes the named safer_db volume
 
 ## Using SAFER in your agent
 
-### The one-liner
+### What `instrument()` actually does
 
 ```python
 from safer import instrument
-
-instrument()   # idempotent; detects the frameworks you have installed
+instrument(agent_id="support", agent_name="Support")
 ```
 
-That's the whole integration for any framework with a bundled adapter.
+`instrument()` boots the SAFER runtime (transport + backend connection),
+emits a one-shot `on_agent_register` event carrying a gzip snapshot of
+your agent's source (for the Inspector scan), and tags the agent with
+whichever framework it detects in your environment.
 
-### With the Anthropic Claude Agent SDK
+**`instrument()` does not bridge the 9 lifecycle hooks on its own.** The
+per-framework adapter (one more line in your code) does that. And as a
+convenience, every bundled adapter calls `ensure_runtime(...)` in its
+constructor — so if you don't need to customize the runtime, you can
+skip `instrument()` entirely and just write the adapter line.
+
+### Two-line integration per framework
+
+Whichever framework you're on, there's exactly one adapter line to
+add. Copy-paste from the table below into your own code; no other
+glue is required.
+
+#### Google ADK — Runner plugin
+
+```python
+from google.adk.agents import LlmAgent
+from google.adk.runners import InMemoryRunner
+from safer.adapters.google_adk import SaferAdkPlugin
+
+agent = LlmAgent(model="gemini-2.5-pro", ...)
+runner = InMemoryRunner(
+    agent=agent,
+    app_name="repo_analyst",
+    plugins=[SaferAdkPlugin(agent_id="repo_analyst",
+                             agent_name="Repo Analyst")],
+)
+```
+
+Native layer: ADK `BasePlugin` (Google-recommended for monitoring).
+All 9 SAFER hooks emit automatically.
+
+#### AWS Strands — Agent hook provider
+
+```python
+from strands import Agent
+from strands.models.anthropic import AnthropicModel
+from safer.adapters.strands import SaferHookProvider
+
+agent = Agent(
+    model=AnthropicModel(model_id="claude-opus-4-7"),
+    tools=[...],
+    hooks=[SaferHookProvider(agent_id="system_diag",
+                              agent_name="System Diagnostic")],
+)
+```
+
+Native layer: Strands `HookProvider` (the modern replacement for
+Strands' older callback handler mechanism). All 9 SAFER hooks emit
+automatically.
+
+#### LangChain / LangGraph — Callback handler
+
+```python
+from safer.adapters.langchain import SaferCallbackHandler
+
+handler = SaferCallbackHandler(agent_id="code_analyst",
+                                agent_name="Code Analyst")
+agent_executor.invoke({"input": "..."},
+                      config={"callbacks": [handler]})
+```
+
+Native layer: LangChain `BaseCallbackHandler`. All 9 SAFER hooks emit
+automatically — no manual helpers required.
+
+#### Anthropic (raw SDK) — OpenTelemetry bridge (recommended)
+
+```python
+from safer.adapters.otel import configure_otel_bridge
+
+configure_otel_bridge(agent_id="support", agent_name="Support",
+                      instrument=["anthropic"])
+# Every Anthropic() call from here on is observed by SAFER.
+```
+
+Needs `pip install 'safer-sdk[otel-anthropic]'`. This installs
+`opentelemetry-instrumentation-anthropic`, which emits GenAI spans for
+`messages.create` and tool calls; SAFER's `/v1/traces` parses them
+into all 9 hooks. No `wrap_anthropic`, no manual helpers.
+
+#### OpenAI (raw SDK) — OpenTelemetry bridge (recommended)
+
+```python
+from safer.adapters.otel import configure_otel_bridge
+
+configure_otel_bridge(agent_id="assistant", agent_name="Assistant",
+                      instrument=["openai"])
+# Every OpenAI().chat.completions.create from here on is observed.
+```
+
+Needs `pip install 'safer-sdk[otel-openai]'`. Same story via
+`opentelemetry-instrumentation-openai`.
+
+#### Anthropic / OpenAI — low-level client proxy (alternative)
+
+If you don't want the OTel dep, the legacy client-proxy adapter gives
+you the LLM-call pair automatically and manual helpers for the rest:
 
 ```python
 from anthropic import Anthropic
-from safer import instrument
 from safer.adapters.claude_sdk import wrap_anthropic
 
-instrument()
 client = Anthropic()
-agent = wrap_anthropic(client, agent_id="support", agent_name="Customer Support")
-
-agent.start_session(context={"user": "alice"})
-response = agent.messages.create(model="claude-opus-4-7", messages=[...])
-#   → before_llm_call + after_llm_call emit automatically
-
-agent.before_tool_use("get_order", {"id": 123})
-result = get_order(123)
-agent.after_tool_use("get_order", result)
-
-agent.final_output("Your order has shipped.")
-agent.end_session(success=True)
+agent = wrap_anthropic(client, agent_id="support", agent_name="Support")
+agent.start_session()
+agent.messages.create(model="claude-opus-4-7", messages=[...])
+agent.before_tool_use("get_order", {"id": 123}); ...; agent.after_tool_use(...)
+agent.final_output("Your order has shipped."); agent.end_session()
 ```
 
-### With LangChain / LangGraph
+Emits `before_llm_call` + `after_llm_call` + `on_session_start`
+automatically; the rest are manual helpers. For zero-config full
+coverage, prefer the OTel bridge above.
 
-```python
-from safer import instrument
-from safer.adapters.langchain import SaferCallbackHandler
-
-instrument()
-handler = SaferCallbackHandler(agent_id="code_analyst", agent_name="Code Analyst")
-
-agent_executor.invoke(
-    {"input": "..."},
-    config={"callbacks": [handler]},
-)
-```
-
-`SaferCallbackHandler` maps every LangChain callback (`on_chain_start`,
-`on_llm_start`, `on_tool_start`, `on_agent_action`, `on_agent_finish`,
-the three `*_error` hooks, etc.) onto the 9 SAFER hooks — nothing extra
-for you to wire.
-
-### With OpenAI Agents SDK (partial)
-
-```python
-from openai import OpenAI
-from safer import instrument
-from safer.adapters.openai_agents import wrap_openai
-
-instrument()
-client = wrap_openai(OpenAI(), agent_id="assistant")
-
-resp = client.chat.completions.create(
-    model="gpt-4o",
-    messages=[{"role": "user", "content": "hi"}],
-)
-#   → before_llm_call + after_llm_call + on_error automatic.
-#   Tool / decision / final hooks are emitted via wrap_openai helpers or
-#   safer.track_event() for now.
-```
-
-### Vanilla Python (no framework)
+#### Vanilla Python (no framework) — manual
 
 ```python
 from safer import Hook, instrument, track_event
 
-instrument()
+instrument(agent_id="my-agent", agent_name="My Agent")
 track_event(Hook.ON_SESSION_START, {"agent_name": "my-agent"},
             session_id="sess_1", agent_id="my-agent")
-track_event(Hook.BEFORE_LLM_CALL, {"model": "claude-opus-4-7",
-                                   "prompt": "..."}, ...)
-# ...and so on for each of the 9 hooks.
+# ...one track_event per lifecycle point.
 ```
 
 See [`examples/vanilla-python`](examples/vanilla-python) for a
-complete, 60-line walkthrough.
+complete walkthrough.
 
 ---
 
 ## Framework matrix
 
-| Framework | Support | How |
-|---|---|---|
-| Anthropic Claude Agent SDK | ✅ **Bundled** | `wrap_anthropic(client, agent_id=...)` — all 9 hooks automatic |
-| LangChain / LangGraph | ✅ **Bundled** | `SaferCallbackHandler` — pass via `callbacks=[...]` (9 hooks) |
-| OpenAI Agents SDK | 🔶 **Partial** | `wrap_openai(client, agent_id=...)` — `before/after_llm_call` + `on_error` automatic; tool / decision hooks via `safer.track_event()` |
-| Google ADK | 🔶 Beta stub | `wrap_adk(...)` is an import-safe no-op + warning; use `safer.track_event()` today |
-| AWS Bedrock Agents | 🔶 Beta stub | `wrap_bedrock(...)` is an import-safe no-op + warning; use `safer.track_event()` today |
-| CrewAI | 🔶 Beta stub | `wrap_crew(...)` is an import-safe no-op + warning; use `safer.track_event()` today |
-| AWS Strands | 🟡 OTel | Native OTel, works through the OTLP ingestion shim |
-| LlamaIndex / AutoGen / anything else | 🔵 Custom SDK | 10 lines via `safer.track_event(Hook.*, payload)` — see `examples/vanilla-python` |
+| Framework | Integration layer | Auto hooks | Two-line adapter call |
+|---|---|---|---|
+| Google ADK | Runner plugin (`BasePlugin`) | **10/10** | `plugins=[SaferAdkPlugin(agent_id=..., agent_name=...)]` |
+| AWS Strands | Agent hooks (`HookProvider`) | **10/10** | `hooks=[SaferHookProvider(agent_id=..., agent_name=...)]` |
+| LangChain / LangGraph | Callback handler | **10/10** | `config={"callbacks": [SaferCallbackHandler(agent_id=...)]}` |
+| Anthropic (raw SDK) — OTel bridge | OTel GenAI spans → `/v1/traces` | **10/10** | `configure_otel_bridge(agent_id=..., instrument=["anthropic"])` |
+| OpenAI (raw SDK) — OTel bridge | OTel GenAI spans → `/v1/traces` | **10/10** | `configure_otel_bridge(agent_id=..., instrument=["openai"])` |
+| Anthropic (raw SDK) — client proxy | `messages.create` wrapped | 3/10 automatic + manual helpers | `wrap_anthropic(Anthropic(), agent_id=...)` |
+| OpenAI (raw SDK) — client proxy | `*.create` wrapped | 4/10 automatic + manual helpers | `wrap_openai(OpenAI(), agent_id=...)` |
+| AWS Bedrock Agents | — | 0/10 (planned) | manual `safer.track_event(...)` |
+| CrewAI | — | 0/10 (planned) | manual `safer.track_event(...)` |
+| LlamaIndex / AutoGen / anything | Custom SDK | manual | `safer.track_event(Hook.*, payload)` |
 
 ### Adding your own framework
 
@@ -354,6 +407,17 @@ payloads. Pydantic models live in
 | `on_final_output` | Agent finishes the turn | **Judge** (all six personas), quality cues |
 | `on_session_end` | Session completes | Triggers **Session Report** pipeline |
 | `on_error` | Any adapter-level error | Dashboard, audit trail |
+
+### Hook coverage by adapter
+
+| Adapter | session start/end | llm call pair | tool use pair | agent decision | final output | error |
+|---|---|---|---|---|---|---|
+| Google ADK `SaferAdkPlugin` | ✅ | ✅ | ✅ | ✅ (synth from `on_event` tool_use) | ✅ | ✅ |
+| Strands `SaferHookProvider` | ✅ | ✅ | ✅ | ✅ (synth from `MessageAdded`) | ✅ | ✅ |
+| LangChain `SaferCallbackHandler` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| OTel bridge (Anthropic / OpenAI) | ✅ | ✅ | ✅ | ✅ (from `gen_ai.operation.name`) | ✅ | ✅ |
+| Anthropic `wrap_anthropic` | session_start only | ✅ | manual | manual | manual | manual |
+| OpenAI `wrap_openai` | session_start only | ✅ | manual | manual | manual | ✅ |
 
 ---
 
@@ -414,7 +478,11 @@ Hard rules (also in [`CLAUDE.md`](CLAUDE.md)):
 
 | Path | Framework | Demo |
 |---|---|---|
-| [`examples/customer-support`](examples/customer-support) | Anthropic Claude Agent SDK | Customer-support bot with intentionally risky tools — the canonical demo for the 3-minute video |
+| [`examples/google-adk`](examples/google-adk) | Google ADK + Gemini | Repo Analyst agent via `Runner(plugins=[SaferAdkPlugin(...)])` — 10/10 SAFER hooks automatic |
+| [`examples/strands`](examples/strands) | Strands Agents + Anthropic | System Diagnostic agent via `Agent(hooks=[SaferHookProvider(...)])` with real `ps` / `df` / log tools + a dangerous `run_shell` for policy demos |
+| [`examples/anthropic-otel`](examples/anthropic-otel) | Raw Anthropic SDK + OTel bridge | Tool-calling loop observed via `configure_otel_bridge(instrument=["anthropic"])` — 10/10 hooks, no wrap_anthropic |
+| [`examples/openai-otel`](examples/openai-otel) | Raw OpenAI SDK + OTel bridge | `summarize_url` tool loop observed via `configure_otel_bridge(instrument=["openai"])` |
+| [`examples/customer-support`](examples/customer-support) | Anthropic Claude Agent SDK (low-level client proxy) | Customer-support bot with intentionally risky tools — demo for `wrap_anthropic` + manual helpers |
 | [`examples/code-analyst`](examples/code-analyst) | LangChain + `langchain-anthropic` | Tool-calling agent that reads / greps / AST-scans this repo; shows `SaferCallbackHandler` end-to-end |
 | [`examples/vanilla-python`](examples/vanilla-python) | None (custom SDK) | Minimal 60-line manual instrumentation using `safer.track_event()` |
 
@@ -485,7 +553,7 @@ uv run ruff format .
 ## Testing
 
 ```bash
-uv run pytest              # 185 tests, 1 skipped (needs langchain-core)
+uv run pytest              # 281 tests, 3 skipped
 ```
 
 Test coverage:
@@ -530,12 +598,15 @@ safer/
 │  │     ├─ masking.py          # 7 credential regexes
 │  │     ├─ exceptions.py       # SaferBlocked
 │  │     └─ adapters/
-│  │        ├─ claude_sdk.py    # ✅ Bundled
-│  │        ├─ langchain.py     # ✅ Bundled
-│  │        ├─ openai_agents.py # 🔶 Partial
-│  │        ├─ google_adk.py    # 🔶 Stub
-│  │        ├─ bedrock.py       # 🔶 Stub
-│  │        └─ crewai.py        # 🔶 Stub
+│  │        ├─ _bootstrap.py    # shared ensure_runtime() helper
+│  │        ├─ langchain.py     # ✅ Bundled (BaseCallbackHandler, 10/10)
+│  │        ├─ google_adk.py    # ✅ Bundled (BasePlugin, 10/10)
+│  │        ├─ strands.py       # ✅ Bundled (HookProvider, 10/10)
+│  │        ├─ otel.py          # ✅ OTel bridge (Anthropic + OpenAI, 10/10)
+│  │        ├─ claude_sdk.py    # 🔶 Client proxy (3/10 + manual helpers)
+│  │        ├─ openai_agents.py # 🔶 Client proxy (4/10 + manual helpers)
+│  │        ├─ bedrock.py       # 🔶 Stub (planned)
+│  │        └─ crewai.py        # 🔶 Stub (planned)
 │  ├─ backend/                  # FastAPI + asyncio + SQLite WAL
 │  │  └─ src/safer_backend/
 │  │     ├─ main.py             # app + routers
