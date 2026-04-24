@@ -87,6 +87,7 @@ export interface InspectorReport {
   duration_ms: number;
   persona_review_skipped: boolean;
   persona_review_error: string | null;
+  persona_review_mode?: "managed" | "subagent" | "managed_fallback_subagent" | null;
 }
 
 export type SeverityVariant =

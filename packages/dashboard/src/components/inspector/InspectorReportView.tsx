@@ -3,6 +3,7 @@ import {
   CheckCircle2,
   ChevronDown,
   ChevronRight,
+  Download,
   FileCode,
   Files,
   MessageSquare,
@@ -22,6 +23,7 @@ import {
   PolicySuggestion,
   severityVariant,
 } from "@/lib/inspector-types";
+import { ExportInspectorReportModal } from "./ExportInspectorReportModal";
 
 const PERSONAS: Array<{ key: InspectorPersona; label: string }> = [
   { key: "security_auditor", label: "Security Auditor" },
@@ -33,6 +35,7 @@ type InspectorTab = "findings" | "patterns" | "suggestions" | "files";
 
 export function InspectorReportView({ report }: { report: InspectorReport }) {
   const [tab, setTab] = useState<InspectorTab>("findings");
+  const [exportOpen, setExportOpen] = useState(false);
 
   const personaFindings = useMemo(
     () => report.findings.filter((f) => f.persona != null),
@@ -45,6 +48,21 @@ export function InspectorReportView({ report }: { report: InspectorReport }) {
 
   return (
     <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <h2 className="text-sm font-semibold tracking-tight text-muted-foreground font-mono">
+          Inspector report
+        </h2>
+        <button
+          type="button"
+          onClick={() => setExportOpen(true)}
+          className="inline-flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-xs font-mono hover:bg-muted/40 transition"
+          title="Export this report as JSON / Markdown / HTML"
+        >
+          <Download className="h-3.5 w-3.5" />
+          Export…
+        </button>
+      </div>
+
       <HeaderCard report={report} />
       <ASTCard summary={report.ast_summary} />
 
@@ -71,6 +89,12 @@ export function InspectorReportView({ report }: { report: InspectorReport }) {
           <ScannedFilesCard files={report.scanned_files} />
         </TabsContent>
       </Tabs>
+
+      <ExportInspectorReportModal
+        report={report}
+        open={exportOpen}
+        onClose={() => setExportOpen(false)}
+      />
     </div>
   );
 }
