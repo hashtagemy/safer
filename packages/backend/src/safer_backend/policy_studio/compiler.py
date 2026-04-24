@@ -4,7 +4,8 @@ Design:
 - ONE Opus 4.7 call per compile.
 - System prompt is cached (`cache_control: ephemeral`) and stable across
   compiles so the second-onward call hits the cache.
-- temperature=0 for deterministic output.
+- Anthropic deprecated the `temperature` param on modern Claude models;
+  we rely on the model's default sampling.
 - Output validated by `CompiledPolicy` Pydantic; malformed JSON goes
   through one repair pass before giving up.
 - Closed rule-kind whitelist (pii_guard, tool_allowlist, loop_detection,
@@ -307,7 +308,6 @@ async def _repair_to_json(client: Any, bad_text: str) -> str:
     response = await client.messages.create(
         model=COMPILER_MODEL,
         max_tokens=MAX_TOKENS,
-        temperature=0,
         messages=[{"role": "user", "content": repair_prompt}],
     )
     return _extract_text(response)
@@ -341,7 +341,6 @@ async def compile_policy(nl_text: str) -> CompiledPolicy:
     response = await client.messages.create(
         model=COMPILER_MODEL,
         max_tokens=MAX_TOKENS,
-        temperature=0,
         system=[
             {
                 "type": "text",

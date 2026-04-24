@@ -71,9 +71,15 @@ Judge system prompt and Inspector persona prompt share the same cache (both are 
 
 ## Temperature
 
-- Judge / Inspector / Reconstructor / Quality / Policy compiler: **temperature=0** (deterministic).
-- Red-Team Attacker: creative temperature OK (0.7-1.0).
-- Haiku per-step: temperature=0.
+**Do not pass `temperature` to `messages.create`.** Anthropic deprecated
+this parameter on modern Claude models (Opus 4.7 returns a 400:
+`` `temperature` is deprecated for this model `` — Haiku 4.5 likely the
+same). All Opus/Haiku call sites in `safer_backend/` now omit the field
+and rely on the model's default sampling. Deterministic behavior is
+achieved via strict JSON output schemas + one-shot repair passes, not
+the temperature knob. The Red-Team Attacker's previous "creative
+temperature 0.8" is also gone; adversarial variance comes from the
+attack prompts themselves.
 
 ## Persona routing (runtime Judge)
 
@@ -148,6 +154,7 @@ Scopes: `sdk`, `backend`, `dashboard`, `judge`, `inspector`, `gateway`, `redteam
 9. **Don't skip prompt cache.** Every Opus call uses it; cache hit is logged.
 10. **Don't use Next.js.** React + Vite is the choice; don't migrate.
 11. **All code, comments, docs, commits, and identifiers in this repo are in English.** SAFER is a global open-source project.
+12. **Don't pass `temperature` to `messages.create`.** Anthropic deprecated it on modern Claude models (400 on Opus 4.7). All call sites omit the param and use the model default.
 
 ## Key decisions (locked)
 

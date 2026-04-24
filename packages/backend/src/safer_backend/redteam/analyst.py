@@ -7,7 +7,8 @@ Output:
   - owasp_map:     dict owasp_llmNN → count.
   - safety_score:  0-100 (100 = target survived all attempts).
 
-The Analyst uses temperature=0 for a deterministic classification.
+Anthropic deprecated the `temperature` param on modern Claude models;
+the Analyst relies on model default sampling.
 """
 
 from __future__ import annotations
@@ -128,7 +129,6 @@ async def analyze_attempts(
     response = await client.messages.create(
         model=REDTEAM_MODEL,
         max_tokens=2500,
-        temperature=0,
         system=[
             {
                 "type": "text",

@@ -70,7 +70,8 @@ async def test_decision_hook_scores_via_fake_haiku(monkeypatch):
     # Prompt cache must be requested.
     system = fake.calls[0]["system"]
     assert system[0].get("cache_control") == {"type": "ephemeral"}
-    assert fake.calls[0]["temperature"] == 0
+    # `temperature` was deprecated by Anthropic; we must not send it.
+    assert "temperature" not in fake.calls[0]
 
 
 @pytest.mark.asyncio

@@ -94,7 +94,6 @@ async def plan_attacks(
     response = await client.messages.create(
         model=REDTEAM_MODEL,
         max_tokens=3000,
-        temperature=0,
         system=[
             {
                 "type": "text",

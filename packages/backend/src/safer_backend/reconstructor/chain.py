@@ -217,7 +217,6 @@ async def reconstruct(session_id: str) -> ThoughtChain:
     response = await client.messages.create(
         model=RECON_MODEL,
         max_tokens=MAX_TOKENS,
-        temperature=0,
         system=[
             {
                 "type": "text",

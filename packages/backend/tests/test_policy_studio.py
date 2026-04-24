@@ -120,8 +120,8 @@ async def test_compile_policy_happy_path(monkeypatch):
     # Prompt cache must be requested.
     system = fake.calls[0]["system"]
     assert system[0]["cache_control"] == {"type": "ephemeral"}
-    # Temperature=0.
-    assert fake.calls[0]["temperature"] == 0
+    # `temperature` was deprecated by Anthropic; we must not send it.
+    assert "temperature" not in fake.calls[0]
 
 
 @pytest.mark.asyncio

@@ -157,7 +157,6 @@ async def score_step(
         response = await client.messages.create(
             model=HAIKU_MODEL,
             max_tokens=150,
-            temperature=0,
             system=[
                 {
                     "type": "text",

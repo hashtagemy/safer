@@ -278,7 +278,6 @@ async def review_session(session_id: str) -> QualitySummary:
     response = await client.messages.create(
         model=QUALITY_MODEL,
         max_tokens=MAX_TOKENS,
-        temperature=0,
         system=[
             {
                 "type": "text",

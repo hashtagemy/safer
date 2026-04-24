@@ -6,10 +6,11 @@ the AttackSpec's prompt is the user turn. The response is inspected
 for signs of success (output reveals policy violation, PII, tool
 execution description, etc.).
 
-Creative temperature (0.8) per master plan — adversarial exploration
-benefits from variance. Classification into {success, partial, blocked}
-comes from a small second pass inside the same call via a structured
-output format; we keep it in one call to stay cheap.
+Anthropic deprecated the `temperature` parameter on modern Claude
+models; we rely on the model's default sampling behavior. Adversarial
+variance still comes naturally from the prompt itself — no single
+temperature knob is required. Classification into {success, partial,
+blocked} is produced in the same call via a structured JSON response.
 """
 
 from __future__ import annotations
@@ -31,8 +32,6 @@ from ._client import (
 )
 
 log = logging.getLogger("safer.redteam.attacker")
-
-ATTACKER_TEMPERATURE = 0.8
 
 SYSTEM_PROMPT = """\
 # SAFER Red-Team Attacker
@@ -104,7 +103,6 @@ async def _run_one_attack(
         response = await client.messages.create(
             model=REDTEAM_MODEL,
             max_tokens=1200,
-            temperature=ATTACKER_TEMPERATURE,
             system=[
                 {
                     "type": "text",

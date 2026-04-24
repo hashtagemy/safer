@@ -194,8 +194,8 @@ async def test_judge_event_happy_path_fake_client(monkeypatch):
     system = fake.calls[0]["system"]
     assert isinstance(system, list)
     assert system[0].get("cache_control") == {"type": "ephemeral"}
-    # Temperature=0 for deterministic classification.
-    assert fake.calls[0]["temperature"] == 0
+    # `temperature` was deprecated by Anthropic; we must not send it.
+    assert "temperature" not in fake.calls[0]
 
 
 @pytest.mark.asyncio

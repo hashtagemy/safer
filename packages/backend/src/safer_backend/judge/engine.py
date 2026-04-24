@@ -171,7 +171,6 @@ async def judge_event(
     response = await client.messages.create(
         model=JUDGE_MODEL,
         max_tokens=_current_max_tokens(),
-        temperature=0,
         system=[
             {
                 "type": "text",
@@ -251,7 +250,6 @@ async def _repair_to_json(client: Any, bad_text: str) -> str:
     response = await client.messages.create(
         model=JUDGE_MODEL,
         max_tokens=_current_max_tokens(),
-        temperature=0,
         messages=[{"role": "user", "content": repair_prompt}],
     )
     return _extract_text(response)
