@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import {
   CheckCircle2,
   ChevronDown,
@@ -10,33 +10,90 @@ import {
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/Tabs";
 import { Gauge } from "@/components/SessionReport/Gauge";
 import { cn } from "@/lib/utils";
 import {
   ASTSummary,
   Finding,
+  InspectorPersona,
   InspectorReport,
   PatternMatch,
   PolicySuggestion,
   severityVariant,
 } from "@/lib/inspector-types";
 
+const PERSONAS: Array<{ key: InspectorPersona; label: string }> = [
+  { key: "security_auditor", label: "Security Auditor" },
+  { key: "compliance_officer", label: "Compliance Officer" },
+  { key: "policy_warden", label: "Policy Warden" },
+];
+
+type InspectorTab = "findings" | "patterns" | "suggestions" | "files";
+
 export function InspectorReportView({ report }: { report: InspectorReport }) {
+  const [tab, setTab] = useState<InspectorTab>("findings");
+
+  const personaFindings = useMemo(
+    () => report.findings.filter((f) => f.persona != null),
+    [report.findings]
+  );
+  const findingCount = personaFindings.length;
+  const patternCount = report.pattern_matches.length;
+  const suggestionCount = report.policy_suggestions.length;
+  const fileCount = report.scanned_files.length;
+
   return (
     <div className="space-y-4">
       <HeaderCard report={report} />
       <ASTCard summary={report.ast_summary} />
-      <PatternsCard matches={report.pattern_matches} />
-      <FindingsCard findings={report.findings} />
-      <SuggestionsCard suggestions={report.policy_suggestions} />
-      <ScannedFilesCard files={report.scanned_files} />
+
+      <Tabs value={tab} onChange={(v) => setTab(v as InspectorTab)}>
+        <TabsList>
+          <TabsTrigger value="findings">Findings ({findingCount})</TabsTrigger>
+          <TabsTrigger value="patterns">Patterns ({patternCount})</TabsTrigger>
+          <TabsTrigger value="suggestions">
+            Suggestions ({suggestionCount})
+          </TabsTrigger>
+          <TabsTrigger value="files">Files ({fileCount})</TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="findings">
+          <FindingsByPersona findings={personaFindings} />
+        </TabsContent>
+        <TabsContent value="patterns">
+          <PatternsCard matches={report.pattern_matches} />
+        </TabsContent>
+        <TabsContent value="suggestions">
+          <SuggestionsCard suggestions={report.policy_suggestions} />
+        </TabsContent>
+        <TabsContent value="files">
+          <ScannedFilesCard files={report.scanned_files} />
+        </TabsContent>
+      </Tabs>
     </div>
   );
 }
 
 function ScannedFilesCard({ files }: { files: string[] }) {
   const [open, setOpen] = useState(false);
-  if (files.length === 0) return null;
+  if (files.length === 0) {
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base flex items-center gap-2">
+            <Files className="h-4 w-4 text-safer-ice" />
+            Scanned files
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <p className="text-xs text-muted-foreground font-mono">
+            No files were recorded for this scan.
+          </p>
+        </CardContent>
+      </Card>
+    );
+  }
   const PREVIEW = 10;
   const shown = open ? files : files.slice(0, PREVIEW);
   const hidden = files.length - shown.length;
@@ -255,51 +312,169 @@ function PatternsCard({ matches }: { matches: PatternMatch[] }) {
   );
 }
 
-function FindingsCard({ findings }: { findings: Finding[] }) {
-  if (findings.length === 0) return null;
+function FindingsByPersona({ findings }: { findings: Finding[] }) {
+  // Group persona-sourced findings by their persona key.
+  const byPersona = useMemo(() => {
+    const map: Record<string, Finding[]> = {};
+    for (const p of PERSONAS) map[p.key] = [];
+    for (const f of findings) {
+      if (typeof f.persona === "string" && f.persona in map) {
+        map[f.persona].push(f);
+      }
+    }
+    return map;
+  }, [findings]);
+
+  const anyPersonaHasIssue = Object.values(byPersona).some((list) =>
+    list.some((f) => f.severity === "CRITICAL" || f.severity === "HIGH")
+  );
+
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="text-base">Findings ({findings.length})</CardTitle>
-      </CardHeader>
-      <CardContent className="space-y-1.5">
-        {findings.map((f) => (
-          <div
-            key={f.finding_id}
-            className={cn(
-              "rounded-md border p-2 text-xs",
-              f.severity === "CRITICAL"
-                ? "border-safer-critical/40 bg-safer-critical/5"
-                : "border-border bg-card/40"
-            )}
-          >
-            <div className="flex items-center gap-2 flex-wrap font-mono">
-              <Badge variant={severityVariant[f.severity]}>{f.severity}</Badge>
-              <Badge variant="outline">{f.flag}</Badge>
-              <Badge variant="outline">{f.category}</Badge>
-              <span className="break-all">{f.title}</span>
-              {f.file_path && (
-                <span className="text-[11px] text-muted-foreground ml-auto">
-                  {f.file_path}
-                </span>
+    <div className="space-y-2">
+      {!anyPersonaHasIssue && (
+        <p className="text-xs text-muted-foreground font-mono px-1">
+          Low/medium findings are collapsed by default — click a persona row
+          to expand.
+        </p>
+      )}
+      {PERSONAS.map(({ key, label }) => (
+        <PersonaAccordion
+          key={key}
+          label={label}
+          findings={byPersona[key] ?? []}
+        />
+      ))}
+    </div>
+  );
+}
+
+function PersonaAccordion({
+  label,
+  findings,
+}: {
+  label: string;
+  findings: Finding[];
+}) {
+  const isEmpty = findings.length === 0;
+  const worstSeverity = findings.reduce<
+    "CRITICAL" | "HIGH" | "MEDIUM" | "LOW" | null
+  >((acc, f) => {
+    const order = { LOW: 1, MEDIUM: 2, HIGH: 3, CRITICAL: 4 } as const;
+    if (!acc) return f.severity;
+    return order[f.severity] > order[acc] ? f.severity : acc;
+  }, null);
+  const defaultOpen =
+    !isEmpty && (worstSeverity === "CRITICAL" || worstSeverity === "HIGH");
+  const [open, setOpen] = useState(defaultOpen);
+
+  if (isEmpty) {
+    return (
+      <div
+        className={cn(
+          "flex items-center gap-2 rounded-md border px-3 py-2 text-xs font-mono",
+          "border-safer-success/30 bg-safer-success/10 text-safer-success"
+        )}
+      >
+        <CheckCircle2 className="h-4 w-4 shrink-0" />
+        <span>No findings from {label}</span>
+      </div>
+    );
+  }
+
+  return (
+    <div
+      className={cn(
+        "rounded-md border overflow-hidden",
+        worstSeverity === "CRITICAL"
+          ? "border-safer-critical/40"
+          : worstSeverity === "HIGH"
+          ? "border-safer-warning/40"
+          : "border-border"
+      )}
+    >
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        aria-expanded={open}
+        className="w-full flex items-center gap-2 px-3 py-2 text-xs font-mono hover:bg-muted/30 transition"
+      >
+        {open ? (
+          <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
+        ) : (
+          <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" />
+        )}
+        <span className="font-semibold">{label}</span>
+        <Badge
+          variant={worstSeverity ? severityVariant[worstSeverity] : "outline"}
+        >
+          {findings.length} finding{findings.length === 1 ? "" : "s"}
+        </Badge>
+      </button>
+      {open && (
+        <div className="border-t border-border/60 bg-card/40 p-3 space-y-1.5 animate-fadein">
+          {findings.map((f) => (
+            <div
+              key={f.finding_id}
+              className={cn(
+                "rounded-md border p-2 text-xs",
+                f.severity === "CRITICAL"
+                  ? "border-safer-critical/40 bg-safer-critical/5"
+                  : "border-border bg-card/60"
+              )}
+            >
+              <div className="flex items-center gap-2 flex-wrap font-mono">
+                <Badge variant={severityVariant[f.severity]}>{f.severity}</Badge>
+                <Badge variant="outline">{f.flag}</Badge>
+                <Badge variant="outline">{f.category}</Badge>
+                <span className="break-all">{f.title}</span>
+                {f.file_path && (
+                  <span className="text-[11px] text-muted-foreground ml-auto">
+                    {f.file_path}
+                  </span>
+                )}
+              </div>
+              <p className="mt-1 text-[11px] text-muted-foreground">
+                {f.description}
+              </p>
+              {f.evidence.length > 0 && (
+                <ul className="mt-1 text-[11px] font-mono text-muted-foreground space-y-0.5">
+                  {f.evidence.slice(0, 3).map((e, i) => (
+                    <li key={i} className="break-all">
+                      · {e}
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {f.recommended_mitigation && (
+                <p className="mt-1 text-[11px] font-mono">
+                  <span className="text-muted-foreground">mitigation: </span>
+                  {f.recommended_mitigation}
+                </p>
               )}
             </div>
-            <p className="mt-1 text-[11px] text-muted-foreground">{f.description}</p>
-            {f.recommended_mitigation && (
-              <p className="mt-1 text-[11px] font-mono">
-                <span className="text-muted-foreground">mitigation: </span>
-                {f.recommended_mitigation}
-              </p>
-            )}
-          </div>
-        ))}
-      </CardContent>
-    </Card>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 
 function SuggestionsCard({ suggestions }: { suggestions: PolicySuggestion[] }) {
-  if (suggestions.length === 0) return null;
+  if (suggestions.length === 0) {
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Policy suggestions</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <p className="text-xs text-muted-foreground font-mono">
+            No policy suggestions — Inspector did not recommend new guard
+            rules for this scan.
+          </p>
+        </CardContent>
+      </Card>
+    );
+  }
   return (
     <Card>
       <CardHeader>

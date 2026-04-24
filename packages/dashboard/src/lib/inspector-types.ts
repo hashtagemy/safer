@@ -44,6 +44,11 @@ export interface PatternMatch {
   file_path: string | null;
 }
 
+export type InspectorPersona =
+  | "security_auditor"
+  | "compliance_officer"
+  | "policy_warden";
+
 export interface Finding {
   finding_id: string;
   severity: Severity;
@@ -55,6 +60,7 @@ export interface Finding {
   reproduction_steps: string[];
   recommended_mitigation: string | null;
   file_path: string | null;
+  persona: InspectorPersona | string | null;
 }
 
 export interface PolicySuggestion {
