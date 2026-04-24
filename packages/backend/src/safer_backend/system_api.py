@@ -37,6 +37,7 @@ class SystemInfo(BaseModel):
     redteam_model: str
 
     total_opus_calls: int
+    total_sonnet_calls: int = 0
     total_haiku_calls: int
     total_tokens_in: int
     total_tokens_out: int
@@ -53,15 +54,26 @@ def _db_size(path: str) -> int:
 
 @router.get("", response_model=SystemInfo)
 async def get_system_info() -> SystemInfo:
-    # Model choices mirror CLAUDE.md: Opus 4.7 for reasoning, Haiku 4.5
-    # for the decision-hook per-step score.
-    opus_model = os.environ.get("SAFER_JUDGE_MODEL", "claude-opus-4-7")
+    # Model choices mirror CLAUDE.md's per-call-site routing: Judge +
+    # Inspector + Red-Team Strategist/Attacker on Opus, Quality +
+    # Reconstructor + Policy Compiler + Red-Team Analyst on Sonnet,
+    # per-step score on Haiku.
+    judge_model = os.environ.get("SAFER_JUDGE_MODEL", "claude-opus-4-7")
+    policy_model = os.environ.get("SAFER_POLICY_MODEL", "claude-sonnet-4-6")
+    # Legacy override: SAFER_REDTEAM_MODEL, when set, applies to all
+    # three stages. Otherwise report the Strategist default (Opus).
+    _legacy_rt = os.environ.get("SAFER_REDTEAM_MODEL")
+    redteam_model = os.environ.get(
+        "SAFER_REDTEAM_STRATEGIST_MODEL",
+        _legacy_rt or "claude-opus-4-7",
+    )
 
     async with get_db() as db:
         async with db.execute(
             """
             SELECT
                 COALESCE(SUM(CASE WHEN model LIKE 'claude-opus%' THEN 1 ELSE 0 END), 0),
+                COALESCE(SUM(CASE WHEN model LIKE 'claude-sonnet%' THEN 1 ELSE 0 END), 0),
                 COALESCE(SUM(CASE WHEN model LIKE 'claude-haiku%' THEN 1 ELSE 0 END), 0),
                 COALESCE(SUM(tokens_in), 0),
                 COALESCE(SUM(tokens_out), 0),
@@ -72,10 +84,11 @@ async def get_system_info() -> SystemInfo:
             row = await cur.fetchone()
 
     opus_calls = int(row[0] or 0)
-    haiku_calls = int(row[1] or 0)
-    tokens_in = int(row[2] or 0)
-    tokens_out = int(row[3] or 0)
-    cache_read = int(row[4] or 0)
+    sonnet_calls = int(row[1] or 0)
+    haiku_calls = int(row[2] or 0)
+    tokens_in = int(row[3] or 0)
+    tokens_out = int(row[4] or 0)
+    cache_read = int(row[5] or 0)
     cache_read_ratio = cache_read / tokens_in if tokens_in > 0 else 0.0
 
     return SystemInfo(
@@ -85,11 +98,12 @@ async def get_system_info() -> SystemInfo:
         uptime_seconds=int(time.time() - _START_TS),
         db_path=DEFAULT_DB_PATH,
         db_size_bytes=_db_size(DEFAULT_DB_PATH),
-        judge_model=opus_model,
+        judge_model=judge_model,
         haiku_model="claude-haiku-4-5",
-        policy_compiler_model=os.environ.get("SAFER_POLICY_MODEL", opus_model),
-        redteam_model=os.environ.get("SAFER_REDTEAM_MODEL", opus_model),
+        policy_compiler_model=policy_model,
+        redteam_model=redteam_model,
         total_opus_calls=opus_calls,
+        total_sonnet_calls=sonnet_calls,
         total_haiku_calls=haiku_calls,
         total_tokens_in=tokens_in,
         total_tokens_out=tokens_out,

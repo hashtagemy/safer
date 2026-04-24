@@ -22,7 +22,7 @@ from ..models.findings import Finding, FindingSource, Severity
 from ..models.flags import is_known_flag
 from ..models.redteam import AttackSpec, Attempt
 from ._client import (
-    REDTEAM_MODEL,
+    REDTEAM_ANALYST_MODEL,
     estimate_cost,
     extract_json,
     extract_text,
@@ -127,7 +127,7 @@ async def analyze_attempts(
 
     t0 = time.monotonic()
     response = await client.messages.create(
-        model=REDTEAM_MODEL,
+        model=REDTEAM_ANALYST_MODEL,
         max_tokens=2500,
         system=[
             {
@@ -182,11 +182,11 @@ async def analyze_attempts(
 
     # Cost tracking.
     tin, tout, cache_read, cache_write = usage_tuple(response)
-    cost = estimate_cost(REDTEAM_MODEL, tin, tout, cache_read, cache_write)
+    cost = estimate_cost(REDTEAM_ANALYST_MODEL, tin, tout, cache_read, cache_write)
     try:
         await record_claude_call(
             component="redteam",
-            model=REDTEAM_MODEL,
+            model=REDTEAM_ANALYST_MODEL,
             tokens_in=tin,
             tokens_out=tout,
             cache_read_tokens=cache_read,

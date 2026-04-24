@@ -23,7 +23,7 @@ from typing import Iterable
 from ..judge.cost_tracker import record_claude_call
 from ..models.redteam import AttackSpec, Attempt, AttemptResult
 from ._client import (
-    REDTEAM_MODEL,
+    REDTEAM_ATTACKER_MODEL,
     estimate_cost,
     extract_json,
     extract_text,
@@ -101,7 +101,7 @@ async def _run_one_attack(
     t0 = time.monotonic()
     try:
         response = await client.messages.create(
-            model=REDTEAM_MODEL,
+            model=REDTEAM_ATTACKER_MODEL,
             max_tokens=1200,
             system=[
                 {
@@ -162,11 +162,11 @@ async def _run_one_attack(
 
     # Cost tracking — fire and forget.
     tin, tout, cache_read, cache_write = usage_tuple(response)
-    cost = estimate_cost(REDTEAM_MODEL, tin, tout, cache_read, cache_write)
+    cost = estimate_cost(REDTEAM_ATTACKER_MODEL, tin, tout, cache_read, cache_write)
     try:
         await record_claude_call(
             component="redteam",
-            model=REDTEAM_MODEL,
+            model=REDTEAM_ATTACKER_MODEL,
             tokens_in=tin,
             tokens_out=tout,
             cache_read_tokens=cache_read,

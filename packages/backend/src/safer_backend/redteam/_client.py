@@ -24,7 +24,30 @@ _PRICING: dict[str, tuple[float, float, float, float]] = {
     "claude-haiku-4-5": (0.80, 4.0, 0.08, 1.0),
 }
 
-REDTEAM_MODEL = os.environ.get("SAFER_REDTEAM_MODEL", "claude-opus-4-7")
+# Per-stage model selection. Strategist + Attacker stay on Opus 4.7
+# because adversarial planning / creativity is demo-critical; Analyst
+# drops to Sonnet 4.6 (clustering + OWASP mapping is a structured task
+# that Sonnet handles at ~5× lower cost). The legacy
+# `SAFER_REDTEAM_MODEL` env var, when set, still overrides all three
+# stages — useful for dogfood A/B tests.
+_LEGACY_REDTEAM_MODEL = os.environ.get("SAFER_REDTEAM_MODEL")
+
+REDTEAM_STRATEGIST_MODEL = os.environ.get(
+    "SAFER_REDTEAM_STRATEGIST_MODEL",
+    _LEGACY_REDTEAM_MODEL or "claude-opus-4-7",
+)
+REDTEAM_ATTACKER_MODEL = os.environ.get(
+    "SAFER_REDTEAM_ATTACKER_MODEL",
+    _LEGACY_REDTEAM_MODEL or "claude-opus-4-7",
+)
+REDTEAM_ANALYST_MODEL = os.environ.get(
+    "SAFER_REDTEAM_ANALYST_MODEL",
+    _LEGACY_REDTEAM_MODEL or "claude-sonnet-4-6",
+)
+
+# Backward-compat alias. New code should import the per-stage constant
+# above; this keeps existing imports working.
+REDTEAM_MODEL = REDTEAM_STRATEGIST_MODEL
 
 _client_singleton: Any = None
 

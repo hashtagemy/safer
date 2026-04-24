@@ -15,7 +15,7 @@ from typing import Any
 from ..judge.cost_tracker import record_claude_call
 from ..models.redteam import AttackCategory, AttackSpec
 from ._client import (
-    REDTEAM_MODEL,
+    REDTEAM_STRATEGIST_MODEL,
     estimate_cost,
     extract_json,
     extract_text,
@@ -92,7 +92,7 @@ async def plan_attacks(
 
     t0 = time.monotonic()
     response = await client.messages.create(
-        model=REDTEAM_MODEL,
+        model=REDTEAM_STRATEGIST_MODEL,
         max_tokens=3000,
         system=[
             {
@@ -132,11 +132,11 @@ async def plan_attacks(
 
     # Cost tracking
     tin, tout, cache_read, cache_write = usage_tuple(response)
-    cost = estimate_cost(REDTEAM_MODEL, tin, tout, cache_read, cache_write)
+    cost = estimate_cost(REDTEAM_STRATEGIST_MODEL, tin, tout, cache_read, cache_write)
     try:
         await record_claude_call(
             component="redteam",
-            model=REDTEAM_MODEL,
+            model=REDTEAM_STRATEGIST_MODEL,
             tokens_in=tin,
             tokens_out=tout,
             cache_read_tokens=cache_read,
