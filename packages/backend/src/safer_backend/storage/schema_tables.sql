@@ -162,6 +162,17 @@ CREATE TABLE IF NOT EXISTS inspector_reports (
 );
 
 -- ============================================================
+-- Managed Agents config (persists Anthropic beta resource IDs
+-- across restarts so we don't recreate agents/stores/envs on
+-- every boot). Key/value so we can add more entries later.
+-- ============================================================
+CREATE TABLE IF NOT EXISTS managed_agents_config (
+    key        TEXT PRIMARY KEY,
+    value      TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+-- ============================================================
 -- Cost tracking (per Claude call, for live credit counter)
 -- ============================================================
 CREATE TABLE IF NOT EXISTS claude_calls (
