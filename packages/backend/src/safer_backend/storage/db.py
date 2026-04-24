@@ -1,7 +1,9 @@
 """SQLite connection + migration runner.
 
 WAL mode, sync=NORMAL. One connection per request for FastAPI; async via
-aiosqlite. Schema is in schema.sql — run init_db() at startup.
+aiosqlite. Schema is split into schema_tables.sql (CREATE TABLE) and
+schema_indexes.sql (CREATE INDEX); init_db() runs tables → migrations →
+indexes so that indexes can safely reference columns added via ALTER TABLE.
 """
 
 from __future__ import annotations
@@ -12,7 +14,8 @@ from pathlib import Path
 
 import aiosqlite
 
-SCHEMA_PATH = Path(__file__).parent / "schema.sql"
+SCHEMA_TABLES_PATH = Path(__file__).parent / "schema_tables.sql"
+SCHEMA_INDEXES_PATH = Path(__file__).parent / "schema_indexes.sql"
 DEFAULT_DB_PATH = os.environ.get("SAFER_DB_PATH", "./safer.db")
 
 
@@ -44,12 +47,21 @@ async def _apply_additive_migrations(db: aiosqlite.Connection) -> None:
 
 
 async def init_db(db_path: str | None = None) -> None:
-    """Create tables if they don't exist, then apply additive migrations."""
+    """Create tables, apply additive migrations, then create indexes.
+
+    The three steps are strictly ordered: some indexes target columns that
+    are added via ALTER TABLE (e.g. sessions.parent_session_id /
+    idx_sessions_parent), so an old DB created before those columns
+    existed would fail on index creation if we ran the full schema in one
+    pass before migrations.
+    """
     path = db_path or DEFAULT_DB_PATH
-    schema_sql = SCHEMA_PATH.read_text()
+    tables_sql = SCHEMA_TABLES_PATH.read_text()
+    indexes_sql = SCHEMA_INDEXES_PATH.read_text()
     async with aiosqlite.connect(path) as db:
-        await db.executescript(schema_sql)
+        await db.executescript(tables_sql)
         await _apply_additive_migrations(db)
+        await db.executescript(indexes_sql)
         await db.commit()
 
 

@@ -1,5 +1,10 @@
--- SAFER SQLite schema (WAL mode).
+-- SAFER SQLite schema — tables only (WAL mode).
 -- Append-only events. Schema change = migration (see CLAUDE.md).
+--
+-- Split from schema.sql so init_db() can run in three ordered steps:
+--   1. executescript(schema_tables.sql)   -- create tables
+--   2. _apply_additive_migrations(db)     -- ALTER TABLE ADD COLUMN for new columns
+--   3. executescript(schema_indexes.sql)  -- create indexes (may reference migrated columns)
 
 PRAGMA journal_mode = WAL;
 PRAGMA synchronous = NORMAL;
@@ -30,8 +35,6 @@ CREATE TABLE IF NOT EXISTS agents (
     latest_scan_id       TEXT
 );
 
-CREATE INDEX IF NOT EXISTS idx_agents_last_seen ON agents(last_seen_at);
-
 -- ============================================================
 -- Sessions
 -- ============================================================
@@ -49,10 +52,6 @@ CREATE TABLE IF NOT EXISTS sessions (
     parent_session_id TEXT               -- session that triggered this one (supervisor → worker)
 );
 
-CREATE INDEX IF NOT EXISTS idx_sessions_agent_started ON sessions(agent_id, started_at DESC);
-CREATE INDEX IF NOT EXISTS idx_sessions_ended ON sessions(ended_at);
-CREATE INDEX IF NOT EXISTS idx_sessions_parent ON sessions(parent_session_id);
-
 -- ============================================================
 -- Events (append-only, 9-hook payloads)
 -- ============================================================
@@ -67,12 +66,6 @@ CREATE TABLE IF NOT EXISTS events (
     source       TEXT DEFAULT 'sdk',
     payload_json TEXT NOT NULL          -- full pydantic event
 );
-
-CREATE INDEX IF NOT EXISTS idx_events_session_seq ON events(session_id, sequence);
-CREATE INDEX IF NOT EXISTS idx_events_timestamp ON events(timestamp);
-CREATE INDEX IF NOT EXISTS idx_events_hook ON events(hook);
-CREATE INDEX IF NOT EXISTS idx_events_agent_timestamp ON events(agent_id, timestamp DESC);
-CREATE INDEX IF NOT EXISTS idx_events_risk_hint ON events(risk_hint);
 
 -- ============================================================
 -- Verdicts (Multi-Persona Judge outputs)
@@ -96,11 +89,6 @@ CREATE TABLE IF NOT EXISTS verdicts (
     cost_usd           REAL DEFAULT 0.0
 );
 
-CREATE INDEX IF NOT EXISTS idx_verdicts_event ON verdicts(event_id);
-CREATE INDEX IF NOT EXISTS idx_verdicts_session ON verdicts(session_id);
-CREATE INDEX IF NOT EXISTS idx_verdicts_risk ON verdicts(overall_risk);
-CREATE INDEX IF NOT EXISTS idx_verdicts_agent_ts ON verdicts(agent_id, timestamp DESC);
-
 -- ============================================================
 -- Findings (from Inspector, Red-Team, or Judge flag elevation)
 -- ============================================================
@@ -121,13 +109,6 @@ CREATE TABLE IF NOT EXISTS findings (
     created_at              TEXT NOT NULL
 );
 
-CREATE INDEX IF NOT EXISTS idx_findings_agent ON findings(agent_id);
-CREATE INDEX IF NOT EXISTS idx_findings_session ON findings(session_id);
-CREATE INDEX IF NOT EXISTS idx_findings_severity ON findings(severity);
-CREATE INDEX IF NOT EXISTS idx_findings_flag ON findings(flag);
-CREATE INDEX IF NOT EXISTS idx_findings_source ON findings(source);
-CREATE INDEX IF NOT EXISTS idx_findings_created ON findings(created_at DESC);
-
 -- ============================================================
 -- Policies (Policy Studio — NL compiled rules)
 -- ============================================================
@@ -145,9 +126,6 @@ CREATE TABLE IF NOT EXISTS policies (
     created_at       TEXT NOT NULL,
     test_cases_json  TEXT DEFAULT '[]'
 );
-
-CREATE INDEX IF NOT EXISTS idx_policies_agent ON policies(agent_id);
-CREATE INDEX IF NOT EXISTS idx_policies_active ON policies(active);
 
 -- ============================================================
 -- Red-Team runs (manual button, Managed Agents or sub-agent fallback)
@@ -167,9 +145,6 @@ CREATE TABLE IF NOT EXISTS red_team_runs (
     error             TEXT
 );
 
-CREATE INDEX IF NOT EXISTS idx_redteam_agent ON red_team_runs(agent_id, started_at DESC);
-CREATE INDEX IF NOT EXISTS idx_redteam_phase ON red_team_runs(phase);
-
 -- ============================================================
 -- Inspector reports (onboarding-phase scans, keyed by agent)
 -- ============================================================
@@ -185,8 +160,6 @@ CREATE TABLE IF NOT EXISTS inspector_reports (
     persona_error    TEXT,
     report_json      TEXT NOT NULL
 );
-
-CREATE INDEX IF NOT EXISTS idx_inspector_reports_agent ON inspector_reports(agent_id, created_at DESC);
 
 -- ============================================================
 -- Cost tracking (per Claude call, for live credit counter)
@@ -206,6 +179,3 @@ CREATE TABLE IF NOT EXISTS claude_calls (
     session_id        TEXT,
     event_id          TEXT
 );
-
-CREATE INDEX IF NOT EXISTS idx_claude_calls_ts ON claude_calls(timestamp DESC);
-CREATE INDEX IF NOT EXISTS idx_claude_calls_component ON claude_calls(component);
