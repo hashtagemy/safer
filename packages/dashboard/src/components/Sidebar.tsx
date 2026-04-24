@@ -28,11 +28,11 @@ const NAV_ITEMS = [
 export default function Sidebar() {
   return (
     <aside className="w-60 shrink-0 border-r border-border bg-card/70 flex flex-col backdrop-blur-sm">
-      <div className="h-20 flex flex-col items-center justify-center gap-1 px-4 py-3 border-b border-border">
+      <div className="flex flex-col items-center justify-center gap-2 px-3 py-4 border-b border-border">
         <img
           src={saferLogo}
           alt="SAFER"
-          className="h-10 w-auto drop-shadow-[0_0_8px_rgba(125,211,252,0.35)]"
+          className="w-[65%] h-auto drop-shadow-[0_0_3px_rgba(125,211,252,0.15)]"
         />
         <span className="text-[10px] uppercase tracking-[0.2em] text-muted-foreground">
           Agent Control Plane
