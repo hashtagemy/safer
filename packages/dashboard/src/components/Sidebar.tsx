@@ -11,6 +11,7 @@ import {
   Settings as SettingsIcon,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import saferLogo from "@/assets/safer.svg";
 
 const NAV_ITEMS = [
   { to: "/overview", label: "Overview", icon: LayoutDashboard },
@@ -27,18 +28,15 @@ const NAV_ITEMS = [
 export default function Sidebar() {
   return (
     <aside className="w-60 shrink-0 border-r border-border bg-card/70 flex flex-col backdrop-blur-sm">
-      <div className="h-14 flex items-center gap-2 px-4 border-b border-border">
-        <div className="h-8 w-8 rounded-md bg-gradient-to-br from-safer-ice/30 to-safer-iceDeep/20 border border-safer-ice/50 flex items-center justify-center shadow-[0_0_10px_rgba(125,211,252,0.2)]">
-          <span className="text-safer-ice font-mono font-bold text-sm drop-shadow-[0_0_4px_rgba(125,211,252,0.5)]">
-            S
-          </span>
-        </div>
-        <div className="flex flex-col leading-tight">
-          <span className="font-semibold tracking-tight">SAFER</span>
-          <span className="text-xs text-muted-foreground">
-            Agent Control Plane
-          </span>
-        </div>
+      <div className="h-20 flex flex-col items-center justify-center gap-1 px-4 py-3 border-b border-border">
+        <img
+          src={saferLogo}
+          alt="SAFER"
+          className="h-10 w-auto drop-shadow-[0_0_8px_rgba(125,211,252,0.35)]"
+        />
+        <span className="text-[10px] uppercase tracking-[0.2em] text-muted-foreground">
+          Agent Control Plane
+        </span>
       </div>
       <nav className="flex-1 px-2 py-3 space-y-0.5 overflow-y-auto">
         {NAV_ITEMS.map((item) => (
