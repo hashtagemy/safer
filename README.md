@@ -189,6 +189,15 @@ That's it. The backend comes up on `http://localhost:8000` (with a
 `/health` endpoint and an integrated WebSocket at `/ws/stream`), and
 the dashboard on `http://localhost:5173`.
 
+> **Claude Managed Agents.** The onboarding-phase Inspector runs as a
+> Claude Managed Agent by default (beta header
+> `managed-agents-2026-04-01`), with a shared `safer-inspector-knowledge`
+> memory store that persists patterns across scans. No extra setup is
+> required — same `docker compose up`. If your API key doesn't have
+> Managed Agents beta access the Inspector falls back to the legacy
+> single-call path transparently. To verify beta access ahead of a
+> run: `uv run python scripts/check_managed_agents_access.py`.
+
 ### Seeding demo data
 
 Want a dashboard full of realistic data without running a live agent?
