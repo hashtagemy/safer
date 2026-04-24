@@ -447,30 +447,37 @@ The routing logic is deterministic — see
 > This is a Claude-powered product end to end. The list below is
 > exhaustive — every Claude call SAFER makes is here.
 
-| Feature | Model | Temperature | Prompt cached | Why |
-|---|---|---|---|---|
-| Multi-Persona Judge | Opus 4.7 | 0 | ✅ `ephemeral` | Deterministic classification; one call covers 2–6 personas |
-| Inspector — 3-persona review | Opus 4.7 | 0 | ✅ | Same system prompt as the Judge — cache hits across both |
-| Quality Reviewer | Opus 4.7 | 0 | ✅ | Once per session (on `on_session_end`) |
-| Thought-Chain Reconstructor | Opus 4.7 | 0 | ✅ | Auto on HIGH+ verdict, manual otherwise |
-| Policy Compiler | Opus 4.7 | 0 | ✅ | NL → deterministic rule_json + test cases |
-| Red-Team Strategist | Opus 4.7 | 0 | ✅ | One call; seed bank + target → tailored attacks |
-| Red-Team Attacker | Opus 4.7 | 0.8 | ✅ | Creative adversary, one call per attack |
-| Red-Team Analyst | Opus 4.7 | 0 | ✅ | Clusters attempts into findings + OWASP map |
-| Per-step Haiku score | Haiku 4.5 | 0 | — | Fast relevance + escalate signal at decision hooks only |
-| Session Report aggregator | — | — | — | **Pure Python, zero Claude calls** |
+| Feature | Model | Prompt cached | Why |
+|---|---|---|---|
+| Multi-Persona Judge | Opus 4.7 | ✅ `ephemeral` | Runtime critical-path; 6-persona role-play; cache bucket shared with Inspector |
+| Inspector — 3-persona review | Opus 4.7 | ✅ | Same system prompt as the Judge — cache hits across both |
+| Quality Reviewer | Sonnet 4.6 | ✅ | Session-end summary / goal-drift / hallucination — structured task, ~5× cheaper on Sonnet |
+| Thought-Chain Reconstructor | Sonnet 4.6 | ✅ | Forensic narrative; Sonnet's strong suit |
+| Policy Compiler | Sonnet 4.6 | ✅ | NL → deterministic rule_json + test cases |
+| Red-Team Strategist | Opus 4.7 | ✅ | Creative attack planning; demo-critical |
+| Red-Team Attacker | Opus 4.7 | ✅ | Adversarial creativity; demo-critical |
+| Red-Team Analyst | Sonnet 4.6 | ✅ | Clustering + OWASP mapping — structured |
+| Per-step Haiku score | Haiku 4.5 | — | Fast relevance + escalate signal at decision hooks only |
+| Session Report aggregator | — | — | **Pure Python, zero Claude calls** |
 
 Hard rules (also in [`CLAUDE.md`](CLAUDE.md)):
 
 - **Claude-only.** No OpenAI / Gemini / Llama calls anywhere in the
-  product code. Other frameworks plug in through adapters; the reasoning
-  engine is always Claude.
-- **Opus 4.7 and Haiku 4.5 only.** Sonnet 4.6 was deliberately removed
-  in v3.
-- **Every Opus call uses prompt caching.** Cache hit rate > 80 % on
-  the second call onward; verified by the Judge engine's unit tests.
-- **Temperature=0 for every classifier; 0.8 only for the adversarial
-  Attacker.**
+  product code. Other frameworks plug in through adapters; the
+  reasoning engine is always Claude.
+- **Three models in rotation.** Opus 4.7 for runtime reasoning +
+  cache-sharing siblings; Sonnet 4.6 for post-run / structured /
+  clustering work; Haiku 4.5 for per-step decision-hook scoring.
+  Per-call-site defaults live in CLAUDE.md's Model routing table and
+  every call-site has an `SAFER_*_MODEL` env var override.
+- **Every Opus / Sonnet call uses prompt caching** (`ephemeral` cache
+  control). Cache hit rate > 80 % on the second call onward; verified
+  by engine unit tests.
+- **No `temperature` parameter on any call-site.** Anthropic deprecated
+  it on modern Claude models (Opus 4.7 returns 400); deterministic
+  behaviour comes from strict JSON schemas + repair passes. The
+  Red-Team Attacker's earlier `temperature=0.8` is gone — adversarial
+  variance now comes from the attack prompts themselves.
 
 ---
 

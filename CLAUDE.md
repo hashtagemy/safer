@@ -47,9 +47,33 @@ roadmap/      — plan + phases
 
 ## Model routing (hard rules)
 
-- **Opus 4.7** — Judge (6 personas, dual-mode), Inspector (3-persona code scan), Thought-Chain Reconstructor, Quality Reviewer, Policy Compiler, Red-Team trio.
-- **Haiku 4.5** — Per-step scoring (relevance + escalate combined, at decision hooks only), Gateway borderline (stretch).
-- **Sonnet 4.6** — **NOT USED.** Removed in v3. Do not reintroduce; if you think a task needs Sonnet, open an issue first.
+Three models in rotation. Each call-site picks the cheapest model that
+meets its quality bar. Runtime-critical reasoning + cache-sharing
+siblings stay on Opus; post-run / structured / clustering tasks drop to
+Sonnet; simple per-step scoring uses Haiku.
+
+| Call-site | Model | Rationale |
+|---|---|---|
+| Multi-Persona Judge | **Opus 4.7** | Runtime critical-path; 6-persona role-play; shared cache bucket with Inspector. |
+| Inspector (3-persona code scan) | **Opus 4.7** | Deep code analysis; shared cache with Judge; fires once per agent onboarding. |
+| Quality Reviewer | **Sonnet 4.6** | Session-end summary / goal-drift / hallucination; structured, not cache-sharing; Sonnet sufficient at 5× lower cost. |
+| Thought-Chain Reconstructor | **Sonnet 4.6** | Forensic narrative reconstruction; Sonnet's strong suit. |
+| Policy Compiler | **Sonnet 4.6** | NL → deterministic rule JSON; structured output task. |
+| Red-Team Strategist | **Opus 4.7** | Creative attack planning; demo-critical quality. |
+| Red-Team Attacker | **Opus 4.7** | Adversarial creativity; demo-critical quality. |
+| Red-Team Analyst | **Sonnet 4.6** | Clustering + OWASP mapping; structured analysis. |
+| Per-step Haiku score | **Haiku 4.5** | Fast relevance + escalate signal at decision hooks only. |
+| Session Report aggregator | — | Pure Python, zero Claude calls. |
+
+Per-call-site model can be overridden via environment variables
+(`SAFER_JUDGE_MODEL`, `SAFER_QUALITY_MODEL`, `SAFER_RECON_MODEL`,
+`SAFER_POLICY_MODEL`, `SAFER_REDTEAM_STRATEGIST_MODEL`,
+`SAFER_REDTEAM_ATTACKER_MODEL`, `SAFER_REDTEAM_ANALYST_MODEL`). The
+legacy `SAFER_REDTEAM_MODEL` still overrides all three Red-Team stages
+when set, for backward compatibility.
+
+Changing a call-site's default model requires updating this table + the
+corresponding test expectations.
 
 ## Prompt cache (mandatory)
 
@@ -144,7 +168,7 @@ Scopes: `sdk`, `backend`, `dashboard`, `judge`, `inspector`, `gateway`, `redteam
 ## Don't-do list
 
 1. **Don't add other LLM providers.** Claude-only. No OpenAI / Gemini / Llama calls anywhere.
-2. **Don't reintroduce Sonnet 4.6.** Deliberately removed in v3.
+2. **Model choice per call-site is not ad-hoc.** Defaults are defined in the Model routing table above; change them only with the test + dashboard implications in mind. Per-request overrides use the documented env vars.
 3. **Don't add workspace isolation.** Out of scope — the Gateway already restricts tool use.
 4. **Don't add Red-Team continuous mode.** Always a manual button.
 5. **Don't let Judge run on every event.** Router filters strictly; see persona routing table.
