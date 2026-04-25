@@ -1213,6 +1213,35 @@ class _MethodProxy:
         return next_inner
 
 
+def _is_async_openai_client(client: Any) -> bool:
+    """True iff `client` is `AsyncOpenAI` (or compatible).
+
+    Modern `openai-python` decorates `AsyncCompletions.create` with overload
+    machinery that hides the coroutine flag from `inspect.iscoroutinefunction`,
+    so we can't probe the method directly.  The reliable signals are
+    (a) `isinstance(client, AsyncOpenAI)` and (b) the presence of
+    `_AsyncAPIClient` in the MRO."""
+    try:
+        from openai import AsyncOpenAI
+
+        if isinstance(client, AsyncOpenAI):
+            return True
+    except ImportError:
+        pass
+    # Duck typing fallback for tests that pass plain objects with async
+    # `chat.completions.create`
+    import inspect as _inspect
+
+    msgs = getattr(getattr(client, "chat", None), "completions", None)
+    create = getattr(msgs, "create", None) if msgs is not None else None
+    if create is not None and _inspect.iscoroutinefunction(create):
+        return True
+    # MRO check for SDK-internal subclasses
+    return any(
+        getattr(cls, "__name__", "") == "_AsyncAPIClient" for cls in type(client).__mro__
+    )
+
+
 class _OpenAIAdapter:
     def __init__(
         self,
@@ -1223,6 +1252,7 @@ class _OpenAIAdapter:
         session_id: str | None,
     ) -> None:
         self._inner = inner
+        self._is_async = _is_async_openai_client(inner)
         self._emitter = _OpenAIEmitter(
             agent_id=agent_id,
             agent_name=agent_name,
@@ -1239,7 +1269,11 @@ class _OpenAIAdapter:
         is_with_raw = "with_raw_response" in path
         is_streaming_path = "with_streaming_response" in path
 
-        if inspect.iscoroutinefunction(fn):
+        # The OpenAI SDK's `AsyncCompletions.create` method is wrapped by
+        # Stainless's overload machinery so `inspect.iscoroutinefunction`
+        # returns False even though it IS an async coroutine when called.
+        # Trust the per-adapter `_is_async` flag captured at construction.
+        if self._is_async or inspect.iscoroutinefunction(fn):
             async def awrapped(*args: Any, **kwargs: Any) -> Any:
                 emitter.emit_before_llm(kwargs, path)
                 t0 = time.monotonic()

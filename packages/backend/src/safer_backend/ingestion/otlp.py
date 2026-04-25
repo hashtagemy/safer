@@ -220,6 +220,8 @@ _CACHED_TOKEN_KEYS = (
     "gen_ai.usage.cache_read_tokens",
     "gen_ai.prompt_cache.cached_input_tokens",
     "llm.usage.cache_read_input_tokens",
+    # OpenLLMetry production schema uses dotted keys
+    "gen_ai.usage.cache_read.input_tokens",
 )
 
 
@@ -477,16 +479,52 @@ def map_genai_span_to_safer(
                 source="otlp",
             )
         )
-        # Best-effort tool_use synthesis — when the chat span carries a
-        # `gen_ai.tool.call.id` attribute (Anthropic instrumentor emits
-        # this on the parent span when the model returns a tool_use block),
-        # synthesize an on_agent_decision + before_tool_use so SAFER's
-        # Multi-Persona Judge routes correctly even though the user's
-        # tool execution itself is not OTel-instrumented.
+        # Best-effort tool_use synthesis.  Two sources to handle the two
+        # versions of the OTel GenAI semantic conventions in the wild:
+        #
+        #   1. Older drafts (and our own internal usage): top-level
+        #      `gen_ai.tool.call.id` + `gen_ai.tool.call.name` attributes.
+        #
+        #   2. OpenLLMetry production builds: tool calls live inside the
+        #      JSON-encoded `gen_ai.output.messages` attribute as
+        #      `{"type": "tool_call", "id": ..., "name": ..., "arguments": ...}`
+        #      parts on the assistant message.  Parse them out so SAFER
+        #      sees the same on_agent_decision + before_tool_use it would
+        #      from a native adapter.
         tc_id = span.attributes.get("gen_ai.tool.call.id")
         tc_name = span.attributes.get("gen_ai.tool.call.name") or span.attributes.get(
             "gen_ai.tool.name"
         )
+        tc_args_attr = span.attributes.get("gen_ai.tool.call.arguments") or span.attributes.get(
+            "gen_ai.tool.input"
+        )
+        # Fall through to parsing `gen_ai.output.messages` if no top-level
+        # tool attributes are present.
+        if not (isinstance(tc_id, str) and tc_id):
+            output_msgs = span.attributes.get("gen_ai.output.messages")
+            if isinstance(output_msgs, str):
+                try:
+                    import json as _json
+
+                    parsed_msgs = _json.loads(output_msgs)
+                    if isinstance(parsed_msgs, list):
+                        for m in parsed_msgs:
+                            if not isinstance(m, dict):
+                                continue
+                            for part in m.get("parts", []) or []:
+                                if not isinstance(part, dict):
+                                    continue
+                                if part.get("type") in ("tool_call", "tool_use"):
+                                    tc_id = part.get("id") or tc_id
+                                    tc_name = part.get("name") or tc_name
+                                    raw_args = part.get("arguments") or part.get("input")
+                                    if raw_args is not None:
+                                        tc_args_attr = raw_args
+                                    break
+                            if tc_id and tc_name:
+                                break
+                except Exception:
+                    pass
         if isinstance(tc_id, str) and tc_id and isinstance(tc_name, str) and tc_name:
             events.append(
                 OnAgentDecisionPayload(
@@ -504,11 +542,11 @@ def map_genai_span_to_safer(
             # Also synthesize before_tool_use so the Gateway / Judge tool
             # personas have a hook to run on (the actual tool execution
             # happens in user code which OTel doesn't see).
-            tool_input_attr = span.attributes.get("gen_ai.tool.call.arguments") or span.attributes.get(
-                "gen_ai.tool.input"
-            )
+            tool_input_attr = tc_args_attr
             tool_input: dict[str, Any] = {}
-            if isinstance(tool_input_attr, str):
+            if isinstance(tool_input_attr, dict):
+                tool_input = dict(tool_input_attr)
+            elif isinstance(tool_input_attr, str):
                 try:
                     import json as _json
 
@@ -516,8 +554,6 @@ def map_genai_span_to_safer(
                     tool_input = parsed if isinstance(parsed, dict) else {"value": parsed}
                 except Exception:
                     tool_input = {"_raw": tool_input_attr}
-            elif isinstance(tool_input_attr, dict):
-                tool_input = dict(tool_input_attr)
             events.append(
                 BeforeToolUsePayload(
                     session_id=session_id,

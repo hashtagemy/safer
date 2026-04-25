@@ -302,6 +302,8 @@ def _make_provider_cls() -> type:
             self._tool_start_ts: dict[str, float] = {}
             self._profile_synced = False
             self._last_tokens: tuple[int, int, int] = (0, 0, 0)
+            self._session_start_ts: float | None = None
+            self._total_cost_usd: float = 0.0
 
         @property
         def session_id(self) -> str:
@@ -321,6 +323,8 @@ def _make_provider_cls() -> type:
             self._model_start_ts = None
             self._tool_start_ts.clear()
             self._last_tokens = (0, 0, 0)
+            self._session_start_ts = time.monotonic()
+            self._total_cost_usd = 0.0
 
         # internal plumbing ----------------------------------------
 
@@ -427,11 +431,18 @@ def _make_provider_cls() -> type:
                         total_steps=self._step_count,
                     )
                 )
+                duration_ms = (
+                    int((time.monotonic() - self._session_start_ts) * 1000)
+                    if self._session_start_ts is not None
+                    else 0
+                )
                 self._emit(
                     OnSessionEndPayload(
                         session_id=self.session_id,
                         agent_id=self.agent_id,
                         sequence=self._next_sequence(),
+                        total_duration_ms=duration_ms,
+                        total_cost_usd=self._total_cost_usd,
                         success=True,
                     )
                 )
@@ -511,6 +522,7 @@ def _make_provider_cls() -> type:
                 delta_cache = max(0, cache_read - prev[2])
                 self._last_tokens = (tokens_in, tokens_out, cache_read)
                 cost = _estimate_cost(model, delta_in, delta_out, delta_cache)
+                self._total_cost_usd += cost
                 self._emit(
                     AfterLLMCallPayload(
                         session_id=self.session_id,
