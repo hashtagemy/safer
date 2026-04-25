@@ -6,6 +6,8 @@
 
 [![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/downloads/)
+[![PyPI - safer-sdk](https://img.shields.io/pypi/v/safer-sdk.svg?label=safer-sdk)](https://pypi.org/project/safer-sdk/)
+[![PyPI - safer-backend](https://img.shields.io/pypi/v/safer-backend.svg?label=safer-backend)](https://pypi.org/project/safer-backend/)
 [![Tests](https://img.shields.io/badge/tests-403%20passing-brightgreen.svg)](#testing)
 [![Claude Hackathon 2026](https://img.shields.io/badge/Claude%20Hackathon-2026-purple.svg)](https://www.cerebralvalley.ai/)
 
@@ -174,7 +176,52 @@ list):
 
 ## Quick start
 
-### Docker (preferred)
+There are two pieces. Most users only need the first.
+
+### 1. Instrument any agent — `pip install safer-sdk`
+
+The lightweight client library. Goes in **your agent project**, no
+SAFER repo checkout required.
+
+```bash
+# Just the SDK (4 transitive deps, ~5 MB)
+pip install safer-sdk
+
+# Or with the framework adapter you actually use
+pip install 'safer-sdk[strands]'
+pip install 'safer-sdk[langchain]'
+pip install 'safer-sdk[google-adk]'
+pip install 'safer-sdk[openai]'
+pip install 'safer-sdk[claude]'
+pip install 'safer-sdk[all]'         # every adapter
+```
+
+Then a single line plugs SAFER into your existing framework:
+
+```python
+from strands import Agent
+from safer.adapters.strands import SaferHookProvider
+
+agent = Agent(
+    model=...,
+    tools=[...],
+    hooks=[SaferHookProvider(
+        agent_id="my_agent",
+        agent_name="My Agent",
+        pin_session=True,        # one SAFER session for the whole chat
+    )],
+)
+agent("hello")    # SAFER captures all 9 lifecycle hooks
+```
+
+The full set of two-line integrations (LangChain, ADK, Anthropic raw,
+OpenAI raw, OpenAI Agents SDK, Bedrock, CrewAI, OTel bridge, vanilla
+Python) is in [Using SAFER in your agent](#using-safer-in-your-agent).
+
+### 2. Run the Control Plane — Docker (recommended)
+
+The full stack: backend (Judge / Gateway / Inspector / Red-Team /
+Compliance Pack) + dashboard. Goes on **a server you control**.
 
 ```bash
 git clone https://github.com/hashtagemy/safer.git
@@ -185,9 +232,17 @@ cp .env.example .env
 docker compose up --build
 ```
 
-That's it. The backend comes up on `http://localhost:8000` (with a
-`/health` endpoint and an integrated WebSocket at `/ws/stream`), and
-the dashboard on `http://localhost:5173`.
+The backend comes up on `http://localhost:8000` (with a `/health`
+endpoint and an integrated WebSocket at `/ws/stream`), and the
+dashboard on `http://localhost:5173`. Point your agent's
+`SAFER_API_URL` at this host and start chatting.
+
+> **Pure-Python alternative.** If you don't want Docker:
+> `pip install safer-backend && uvicorn safer_backend.main:app --port 8000`
+> works too, plus `cd packages/dashboard && npm install && npm run dev`
+> for the React/Vite UI. WeasyPrint's native libs (cairo/pango/
+> gdk-pixbuf) need to be installed separately for PDF export — Docker
+> handles them for you.
 
 > **Claude Managed Agents.** The onboarding-phase Inspector runs as a
 > Claude Managed Agent by default (beta header
@@ -251,10 +306,12 @@ glue is required.
 |---|---|
 | `from google.adk.agents import LlmAgent` + `Runner(plugins=[...])` | **Google ADK** plugin |
 | `from strands import Agent` + `agent(prompt)` | **AWS Strands** hook provider |
-| `from langchain ...` + `AgentExecutor` / LCEL pipeline / LangGraph | **LangChain** callback handler |
+| `from langchain ...` + `AgentExecutor` / LCEL pipeline / LangGraph / `create_agent` | **LangChain** callback handler |
 | `from anthropic import Anthropic` + `client.messages.create(...)` (you write the tool-use loop yourself) | **Anthropic** native — `SaferAnthropic` for new code, `wrap_anthropic(Anthropic())` to instrument an existing client |
 | `from openai import OpenAI` + `client.chat.completions.create(...)` (you write the loop yourself) | **OpenAI raw** — `wrap_openai(OpenAI())` |
 | `from agents import Agent, Runner` + `Runner.run(agent, ...)` (the OpenAI Agents SDK framework) | **OpenAI Agents SDK** — `install_safer_for_agents(...)` |
+| `import boto3; client = boto3.client("bedrock-runtime")` + `client.converse(...)` | **AWS Bedrock** — `wrap_bedrock(boto3.client("bedrock-runtime"))` |
+| `from crewai import Crew, Agent, Task` + `crew.kickoff(...)` | **CrewAI** — `SaferCrewListener(agent_id=...)` (assign once, listener auto-registers on the global event bus) |
 | You already run an OpenTelemetry pipeline (Datadog, Jaeger, etc.) and prefer to bridge from there | **OTel bridge** — opt-in alternative, lower hook coverage than the native paths |
 
 > The OpenAI side has two adapters because OpenAI ships two distinct
@@ -263,6 +320,40 @@ glue is required.
 > built in).  Different code shape → different adapter.  Same applies
 > to Anthropic's two paths — they're stylistic alternatives that share
 > the same hook coverage; pick whichever fits your codebase better.
+
+#### `pin_session=True` for chat REPLs
+
+Strands, LangChain, Google ADK, and OpenAI Agents adapters rotate
+their SAFER `session_id` per invocation by default — one chat turn =
+one SAFER session, which is the right shape for short-lived runs
+(scripts, batch jobs, single-prompt CLI tools).
+
+For a **long-running chat REPL** you usually want the whole
+conversation to land as ONE session on `/sessions`. Pass
+`pin_session=True` to the adapter's constructor:
+
+```python
+hooks = [SaferHookProvider(agent_id=..., agent_name=..., pin_session=True)]
+# or
+handler = SaferCallbackHandler(agent_id=..., agent_name=..., pin_session=True)
+# or
+plugin = SaferAdkPlugin(agent_id=..., agent_name=..., pin_session=True)
+# or
+hooks = install_safer_for_agents(agent_id=..., agent_name=..., pin_session=True)
+```
+
+When pinned, the adapter:
+1. Keeps the same `session_id` across every invocation.
+2. Suppresses the per-invocation `on_session_end`.
+3. Registers an `atexit` hook that fires `on_session_end` exactly
+   once on process exit.
+4. Exposes a `close_session(success=True)` method so you can close
+   the session explicitly (the chat-REPL examples in `examples/*-ollama/`
+   call this on Ctrl+D).
+
+The Anthropic raw, OpenAI raw, Bedrock, and CrewAI adapters are
+already chat-friendly by default (one client/listener = one session +
+atexit close), so no flag is needed there.
 
 #### Google ADK — Runner plugin
 
@@ -382,6 +473,66 @@ Registers a global `TracingProcessor` (idempotent) and returns a
 `SaferRunHooks` instance for the run.  Native layer: the SDK's
 first-class `RunHooks` + `TracingProcessor` surface — handoffs,
 guardrails, and multi-agent runs all flow through.
+
+#### AWS Bedrock (`bedrock-runtime`) — `wrap_bedrock`
+
+```python
+import boto3
+from safer.adapters.bedrock import wrap_bedrock
+
+client = wrap_bedrock(
+    boto3.client("bedrock-runtime", region_name="us-east-1"),
+    agent_id="bedrock_demo",
+    agent_name="Bedrock Demo",
+)
+
+response = client.converse(
+    modelId="anthropic.claude-haiku-4-5-20251001-v1:0",
+    messages=[{"role": "user", "content": [{"text": "Hello"}]}],
+)
+```
+
+Wraps the Bedrock Converse API (the modern, model-agnostic surface
+across Claude / Mistral / Cohere / Llama).  Both `converse(...)` and
+`converse_stream(...)` are instrumented — streaming responses are
+accumulated chunk-by-chunk so `after_llm_call` carries real usage +
+tool-call data.  `toolUse` blocks in the response auto-emit
+`on_agent_decision` + `before_tool_use`; `toolResult` blocks in the
+next request's `messages` array pair into `after_tool_use`.  Every
+other method on the underlying boto3 client (`invoke_model`,
+paginators, exceptions, etc.) passes through unchanged.
+
+The Bedrock wrapper is already chat-friendly — one client = one SAFER
+session for the wrapper's lifetime, atexit fires `on_session_end`
+once.  Pass `pin_session=False` only if you genuinely want per-call
+session rotation.
+
+#### CrewAI — `SaferCrewListener`
+
+```python
+from crewai import Agent, Crew, Task
+from safer.adapters.crewai import SaferCrewListener
+
+# Construct the listener once. It auto-registers handlers on CrewAI's
+# global event bus (`crewai.events.crewai_event_bus`); keep a reference
+# alive (e.g. assign to a module-level variable) for the duration of
+# your process.
+listener = SaferCrewListener(
+    agent_id="research_crew",
+    agent_name="Research Crew",
+    pin_session=True,   # one SAFER session for the whole REPL
+)
+
+crew = Crew(agents=[...], tasks=[...])
+crew.kickoff(inputs={"topic": "..."})  # listener fires automatically
+```
+
+The listener subscribes to CrewAI's event bus and translates every
+`CrewKickoff* / LLMCall* / ToolUsage*` event into the SAFER 9-hook
+contract.  No wrapper around the crew object is needed; the legacy
+`wrap_crew(crew, agent_id=...)` helper is retained as a back-compat
+shim that just instantiates the listener and returns the crew
+unchanged.
 
 #### OpenTelemetry bridge (opt-in alternative)
 
@@ -562,6 +713,12 @@ Every example opens an interactive **chat REPL by default** so you
 can talk to the agent while watching SAFER's `/live` dashboard. Pass
 `--prompt "..."` to any of them for a one-shot run instead.
 
+### Production-flavoured demos
+
+These are the "real" demos against the named frameworks. Most use a
+real LLM (Anthropic / OpenAI / Gemini) and exercise the full SAFER
+detection surface.
+
 | Path | Framework | Demo |
 |---|---|---|
 | [`examples/code-analyst`](examples/code-analyst) ★ | LangChain + `langchain-anthropic` | Code Analyst chat agent (7 tools — read / grep / AST / git_log / ...) via `SaferCallbackHandler` |
@@ -575,6 +732,31 @@ can talk to the agent while watching SAFER's `/live` dashboard. Pass
 | [`examples/vanilla-python`](examples/vanilla-python) | None (custom SDK) | Manual `safer.track_event(...)` REPL — for frameworks that have no bundled adapter |
 
 ★ = recommended starting points for a first walkthrough.
+
+### Local-only chat REPLs (Ollama-backed, zero cost)
+
+The smallest possible end-to-end agents that prove `pin_session=True`
+keeps the whole conversation on one SAFER session. All five
+Ollama-backed demos run against `gemma4:31b` locally — **no
+Anthropic / OpenAI key required**, no money spent. The Anthropic
+chat demo is the lone exception (real Claude key).
+
+| Path | Framework | Backend |
+|---|---|---|
+| [`examples/strands-ollama`](examples/strands-ollama) | Strands Agents + Ollama | Local |
+| [`examples/langchain-ollama`](examples/langchain-ollama) | LangChain `create_agent` + `langchain-ollama` | Local |
+| [`examples/adk-ollama`](examples/adk-ollama) | Google ADK + LiteLLM → Ollama | Local |
+| [`examples/openai-ollama`](examples/openai-ollama) | Raw OpenAI SDK pointed at Ollama's `/v1` | Local |
+| [`examples/openai-agents-ollama`](examples/openai-agents-ollama) | OpenAI Agents SDK pointed at Ollama's `/v1` | Local |
+| [`examples/anthropic-chat`](examples/anthropic-chat) | Raw Anthropic SDK | Real Claude (cheap Haiku by default) |
+
+### Detection demo — looks fine, isn't
+
+| Path | Framework | Demo |
+|---|---|---|
+| [`examples/buggy-helpdesk`](examples/buggy-helpdesk) ⚠ | Strands Agents + Ollama | A polished-looking ACME IT helpdesk with 13 plausible-looking vulnerabilities (hardcoded creds, eval, shell injection, SQL string-concat, weak hash, ssl_verify=False, debug=True, plaintext http, pickle, naive system prompt, PII in tool results, path traversal, no tenant isolation). Pair it with the dashboard to see Inspector flag ~10 deterministic patterns at scan time, runtime PII flowing through `after_tool_use`, and Gateway's `prompt_injection_guard` blocking the obvious attempts. |
+
+⚠ = intentionally insecure agent — never deploy.
 
 Each example has its own `README.md` with prereqs, run commands, and
 a "Prompts to try" list.
@@ -650,16 +832,25 @@ uv run pytest              # 403 tests, 2 skipped
 Test coverage:
 
 - **SDK** — event models, transport batching + backpressure, credential
-  masking (7 patterns), Claude SDK adapter, LangChain adapter
-  (fallback + full flow + error), OpenAI partial adapter, stubs.
+  masking (7 patterns), all 10 bundled adapters (LangChain sync + async,
+  Strands, Google ADK, Anthropic native + wrap, OpenAI raw + Agents,
+  Bedrock, CrewAI, OTel bridge), `pin_session=True` lifecycle across
+  every rotating adapter (9 dedicated tests), the lazy adapter-import
+  contract (each module loads cleanly without its target framework
+  installed), and the standalone `pip install safer-sdk` smoke path.
 - **Backend** — all ingestion paths, Judge engine (prompt cache, JSON
-  repair), persona routing, Gateway (PII regex + 3 guard modes),
-  Inspector (AST, 12 patterns, persona review), Policy Studio
-  (compile + activate + gateway integration), Session Report
-  (aggregator across scenarios, OWASP map, cost summary, orchestrator,
-  API), Red-Team (seed bank, each stage, orchestrator success + fail,
-  API), Compliance Pack (loader, all three templates, HTML/JSON/PDF
-  rendering, API 400 / 501 paths), sessions list + events endpoint.
+  repair, cache hit-rate measurement), persona routing, Gateway (PII
+  regex + 3 guard modes + sub-100ms latency assertion), Inspector (AST,
+  12 patterns × positive + negative coverage, persona review, Managed
+  Agents path with memory store), Policy Studio (compile + activate +
+  gateway integration), Session Report (aggregator across scenarios,
+  OWASP map, cost summary, orchestrator, API), Red-Team (seed bank,
+  each stage, orchestrator success + fail, API, **3-stage Managed
+  Agents path with bootstrap caching + every fallback edge** — 27
+  tests), Compliance Pack (loader, all three templates, HTML/JSON/PDF
+  rendering, API 400 / 501 paths), sessions list + events endpoint,
+  closed-vocabulary flag system (23 tests pinning the 68-flag contract
+  + `custom_` prefix).
 
 No tests require a live Anthropic API key. Each Claude-powered
 component exposes a `set_client()` injection point that tests use with
@@ -768,19 +959,44 @@ safer/
 
 ## Roadmap
 
-**v0.1** (this release — Claude Hackathon 2026 submission):
+**v0.1.0** (released — Claude Hackathon 2026 submission):
 
-- All four pillars × four lifecycle phases live.
-- Bundled adapters: Claude SDK (raw + subclass), OpenAI raw,
-  OpenAI Agents SDK, LangChain (sync + async), Google ADK, Strands,
-  AWS Bedrock (`bedrock-runtime` converse proxy), CrewAI
-  (`SaferCrewListener` event bus). All ten emit the full 9-hook
-  contract with `pin_session` for chat REPLs and tool_use auto-
-  detection where the framework supports it.
+- **On PyPI.** `pip install safer-sdk` for the lightweight client
+  (~5 MB, 4 deps); `pip install safer-backend` for the full server
+  (FastAPI + Judge + Inspector + Gateway + Red-Team + Compliance Pack).
+  Tag-driven release via `.github/workflows/auto-release.yml` —
+  `git tag v0.1.x && git push origin v0.1.x` and both packages
+  publish in lockstep. See [`docs/RELEASING.md`](docs/RELEASING.md).
+- **Ten bundled adapters**, all 10/10 hook coverage: Claude SDK
+  (raw + subclass), OpenAI raw, OpenAI Agents SDK, LangChain (sync +
+  async incl. modern `create_agent`), Google ADK, Strands, AWS
+  Bedrock (`bedrock-runtime` converse proxy with `toolUse` auto-
+  detect + `toolResult` pairing + streaming accumulator), CrewAI
+  (`SaferCrewListener` on the global event bus). `pin_session=True`
+  for the four rotating adapters wraps a chat REPL in one SAFER
+  session.
 - Optional OTel bridge for Anthropic / OpenAI raw users who already run
   an OpenLLMetry pipeline.
-- Policy Studio, Inspector, Red-Team, Session Report, Compliance Pack.
+- All four pillars × four lifecycle phases live: Inspector with the
+  Claude Managed Agents path (memory-store-backed); Multi-Persona
+  Judge (6 personas, dynamic routing per event, single Opus 4.7 call);
+  Gateway (PII regex + 4 built-in policies + 3 guard modes); Red-Team
+  Squad with the **real 3-stage Managed Agents path** (Strategist Opus
+  4.7 → Attacker Opus 4.7 → Analyst Sonnet 4.6 — each a distinct
+  Managed Agent); Quality Reviewer + Thought-Chain Reconstructor;
+  Session Report (deterministic Python aggregator, 0 Claude calls);
+  Compliance Pack (GDPR / SOC 2 / OWASP LLM, PDF / HTML / JSON).
 - Self-hosted dashboard with 10 fully-featured pages.
+- 16 example agents covering every adapter, every framework, both
+  hosted-LLM and Ollama-local paths, plus a deliberately-buggy
+  helpdesk demo for testing the detection layers end to end.
+- 403 tests passing, 0 failing. Includes `pin_session` lifecycle
+  tests, Bedrock + CrewAI end-to-end coverage, Red-Team Managed (27
+  tests across bootstrap + 3-stage flow + every fallback edge),
+  cache hit-rate measurement, sub-100 ms gateway latency assertion,
+  closed-vocabulary flag pinning, exhaustive Inspector pattern
+  positive + negative coverage, and a fresh-venv standalone
+  `pip install` smoke test.
 
 **v0.2 (planned):**
 
