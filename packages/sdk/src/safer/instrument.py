@@ -184,6 +184,16 @@ def _register_adapters(client: SaferClient) -> str:
     """
     import importlib.util
 
+    def _has_module(name: str) -> bool:
+        """find_spec on a dotted name raises ModuleNotFoundError on
+        Python 3.13+ when the *parent* package is missing (e.g.
+        looking for `google.adk` when `google` itself isn't installed).
+        Catch that so detection stays a soft probe — never a fatal."""
+        try:
+            return importlib.util.find_spec(name) is not None
+        except (ModuleNotFoundError, ValueError, ImportError):
+            return False
+
     detected: list[str] = []
 
     # Framework-native first — these imply a native hook adapter is in
@@ -192,8 +202,10 @@ def _register_adapters(client: SaferClient) -> str:
         ("langchain", "langchain"),
         ("google-adk", "google.adk"),
         ("strands", "strands"),
+        ("crewai", "crewai"),
+        ("bedrock", "boto3"),
     ):
-        if importlib.util.find_spec(module) is not None:
+        if _has_module(module):
             detected.append(label)
 
     # Raw LLM SDKs — usually paired with the OTel bridge or wrap_* shims.
@@ -201,13 +213,13 @@ def _register_adapters(client: SaferClient) -> str:
         ("anthropic", "anthropic"),
         ("openai", "openai"),
     ):
-        if importlib.util.find_spec(module) is not None:
+        if _has_module(module):
             detected.append(label)
 
     # OpenTelemetry as a fallback label when the user is likely using
     # the OTel bridge path but none of the framework-native deps above
     # are in the picture.
-    has_otel = importlib.util.find_spec("opentelemetry.sdk") is not None
+    has_otel = _has_module("opentelemetry.sdk")
 
     if detected:
         log.info("SAFER: detected frameworks: %s", ", ".join(detected))

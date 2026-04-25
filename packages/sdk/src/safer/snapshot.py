@@ -480,9 +480,31 @@ def walk_explicit_patterns(
     seen: set[Path] = set()
 
     for pattern in include_globs:
-        for match in workspace_root.glob(pattern):
-            if not match.is_file():
-                continue
+        # Handle absolute paths (and absolute glob patterns) gracefully:
+        # `Path.glob` rejects them on most Python versions ("Non-relative
+        # patterns are unsupported"). For users running outside a
+        # workspace — `instrument(include=[__file__])` from a third-
+        # party project — we want this to Just Work, so we fall back to
+        # treating the pattern as a literal filesystem path.
+        pattern_path = Path(pattern)
+        if pattern_path.is_absolute():
+            matches: list[Path] = []
+            if pattern_path.is_file():
+                matches = [pattern_path]
+            elif pattern_path.is_dir():
+                matches = [p for p in pattern_path.rglob("*") if p.is_file()]
+            else:
+                # Try as an absolute glob — anchor to its drive root.
+                try:
+                    anchor = Path(pattern_path.anchor or "/")
+                    rel_pat = pattern_path.relative_to(anchor).as_posix()
+                    matches = [m for m in anchor.glob(rel_pat) if m.is_file()]
+                except (ValueError, NotImplementedError):
+                    matches = []
+        else:
+            matches = [m for m in workspace_root.glob(pattern) if m.is_file()]
+
+        for match in matches:
             resolved = match.resolve()
             if resolved in seen:
                 continue
@@ -501,7 +523,15 @@ def walk_explicit_patterns(
                 text = resolved.read_text(encoding="utf-8", errors="replace")
             except OSError:
                 continue
-            rel = resolved.relative_to(workspace_root).as_posix()
+            try:
+                rel = resolved.relative_to(workspace_root).as_posix()
+            except ValueError:
+                # The file is outside workspace_root (only happens when
+                # the user passed an absolute path that escapes the
+                # detected workspace). Fall back to the file name so
+                # the snapshot still records the content with a stable
+                # identifier.
+                rel = resolved.name
             collected.append((rel, text))
             running += size
 

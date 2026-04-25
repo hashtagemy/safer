@@ -223,13 +223,18 @@ def test_otel_only_environment_returns_otel_bridge_label(
     original_find_spec = importlib.util.find_spec
 
     def _fake_find_spec(name: str, *args, **kwargs):
-        # Hide every framework-native + raw-LLM SDK.
+        # Hide every framework-native + raw-LLM SDK that the detector
+        # probes for. Update this set whenever a new probe is added to
+        # `_register_adapters` or this test will start returning the
+        # newly-added label instead of the OTel fallback.
         hidden = {
             "anthropic",
             "openai",
             "langchain",
             "google.adk",
             "strands",
+            "crewai",
+            "boto3",
         }
         if name in hidden:
             return None
