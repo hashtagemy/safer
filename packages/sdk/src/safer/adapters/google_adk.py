@@ -225,6 +225,7 @@ def _make_plugin_cls() -> type:
             agent_name: str | None = None,
             session_id: str | None = None,
             client: SaferClient | None = None,
+            pin_session: bool = False,
         ) -> None:
             ensure_runtime(agent_id, agent_name)
             super().__init__(name="safer")
@@ -233,9 +234,14 @@ def _make_plugin_cls() -> type:
             # `session_id` constructor arg pins the FIRST invocation only;
             # subsequent invocations rotate to fresh UUIDs (see
             # `_begin_invocation`).  None means "auto-generate per invocation".
+            #
+            # `pin_session=True` makes every Runner.run_async invocation
+            # share one SAFER session and defers `on_session_end` to
+            # process exit (atexit) — useful for chat REPLs.
             self._initial_session_id = session_id
             self._current_session_id: str | None = None
             self._client = client
+            self._pin_session = pin_session
             self._session_started = False
             self._sequence = 0
             self._step_count = 0
@@ -243,6 +249,9 @@ def _make_plugin_cls() -> type:
             self._tool_start_ts: dict[str, float] = {}
             self._last_model = "gemini"
             self._profile_synced = False
+            self._atexit_registered = False
+            if pin_session:
+                self._register_atexit_close()
 
         # internal plumbing ----------------------------------------
 
@@ -266,7 +275,15 @@ def _make_plugin_cls() -> type:
             Called from `before_run_callback`.  Each `Runner.run_async()`
             call produces a new `invocation_id`; we map one ADK invocation
             to one SAFER session so that a runner serving multiple user
-            messages produces distinct sessions on the dashboard."""
+            messages produces distinct sessions on the dashboard.
+
+            With `pin_session=True` we keep the existing SAFER session_id
+            stable across invocations and only zero the per-invocation
+            working maps."""
+            if self._pin_session:
+                self._model_start_ts.clear()
+                self._tool_start_ts.clear()
+                return
             # Rotate session id (use the ADK invocation_id if provided so
             # the SAFER and ADK ids correlate; otherwise auto-generate).
             if invocation_id:
@@ -279,6 +296,44 @@ def _make_plugin_cls() -> type:
             self._step_count = 0
             self._model_start_ts.clear()
             self._tool_start_ts.clear()
+
+        def _register_atexit_close(self) -> None:
+            if self._atexit_registered:
+                return
+            import atexit
+
+            atexit.register(self._atexit_close_session)
+            self._atexit_registered = True
+
+        def _atexit_close_session(self) -> None:
+            if not self._pin_session or not self._session_started:
+                return
+            try:
+                self._emit(
+                    OnSessionEndPayload(
+                        session_id=self.session_id,
+                        agent_id=self.agent_id,
+                        sequence=self._next_sequence(),
+                        success=True,
+                    )
+                )
+                self._session_started = False
+            except Exception:  # pragma: no cover — atexit must never raise
+                pass
+
+        def close_session(self, *, success: bool = True) -> None:
+            """Manually emit `on_session_end` when pin_session is True."""
+            if not self._pin_session or not self._session_started:
+                return
+            self._emit(
+                OnSessionEndPayload(
+                    session_id=self.session_id,
+                    agent_id=self.agent_id,
+                    sequence=self._next_sequence(),
+                    success=success,
+                )
+            )
+            self._session_started = False
 
         def _get_client(self) -> SaferClient | None:
             return self._client or get_client()
@@ -586,6 +641,10 @@ def _make_plugin_cls() -> type:
 
         async def after_run_callback(self, *, invocation_context: Any) -> None:
             try:
+                # pin_session=True keeps the SAFER session open across
+                # ADK invocations; the atexit hook closes it once.
+                if self._pin_session:
+                    return None
                 self._emit(
                     OnSessionEndPayload(
                         session_id=self.session_id,

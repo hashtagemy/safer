@@ -218,6 +218,7 @@ class _AgentsEmitter:
         agent_name: str | None,
         session_id: str | None,
         safer_client: SaferClient | None,
+        pin_session: bool = False,
     ) -> None:
         from ._bootstrap import ensure_runtime
 
@@ -227,6 +228,7 @@ class _AgentsEmitter:
         self._initial_session_id = session_id
         self._current_session_id: str | None = None
         self._safer = safer_client
+        self._pin_session = pin_session
         self._sequence = 0
         self._step_count = 0
         self._session_started = False
@@ -235,6 +237,9 @@ class _AgentsEmitter:
         # tool_call_id -> (tool_name, started_ts) — populated in on_tool_start,
         # drained in on_tool_end.
         self._pending_tool_calls: dict[str, tuple[str, float]] = {}
+        self._atexit_registered = False
+        if pin_session:
+            self._register_atexit_close()
 
     @property
     def session_id(self) -> str:
@@ -245,7 +250,15 @@ class _AgentsEmitter:
         return self._current_session_id
 
     def _begin_session(self) -> None:
-        """Start a fresh session for a new Runner.run() invocation."""
+        """Start a fresh session for a new Runner.run() invocation.
+
+        With `pin_session=True` this is a soft reset: session_id stays,
+        the per-invocation tool-pairing map clears, but counters keep
+        growing for session-wide accounting.
+        """
+        if self._pin_session:
+            self._pending_tool_calls.clear()
+            return
         self._current_session_id = f"sess_{uuid.uuid4().hex[:16]}"
         self._sequence = 0
         self._step_count = 0
@@ -253,6 +266,61 @@ class _AgentsEmitter:
         self._session_start_ts = time.monotonic()
         self._total_cost_usd = 0.0
         self._pending_tool_calls.clear()
+
+    def _register_atexit_close(self) -> None:
+        if self._atexit_registered:
+            return
+        import atexit
+
+        atexit.register(self._atexit_close_session)
+        self._atexit_registered = True
+
+    def _atexit_close_session(self) -> None:
+        if not self._pin_session or not self._session_started:
+            return
+        try:
+            duration = (
+                int((time.monotonic() - self._session_start_ts) * 1000)
+                if self._session_start_ts is not None
+                else 0
+            )
+            self._emit(
+                OnSessionEndPayload(
+                    session_id=self.session_id,
+                    agent_id=self.agent_id,
+                    sequence=self._next_seq(),
+                    total_duration_ms=duration,
+                    total_cost_usd=self._total_cost_usd,
+                    success=True,
+                    source="adapter:openai_agents",
+                )
+            )
+            self._session_started = False
+        except Exception:  # pragma: no cover — atexit must never raise
+            pass
+
+    def close_session(self, *, success: bool = True) -> None:
+        """Manually close the pinned chat session. No-op when
+        pin_session=False."""
+        if not self._pin_session or not self._session_started:
+            return
+        duration = (
+            int((time.monotonic() - self._session_start_ts) * 1000)
+            if self._session_start_ts is not None
+            else 0
+        )
+        self._emit(
+            OnSessionEndPayload(
+                session_id=self.session_id,
+                agent_id=self.agent_id,
+                sequence=self._next_seq(),
+                total_duration_ms=duration,
+                total_cost_usd=self._total_cost_usd,
+                success=success,
+                source="adapter:openai_agents",
+            )
+        )
+        self._session_started = False
 
     def _next_seq(self) -> int:
         client = self._safer or get_client()
@@ -314,6 +382,10 @@ class _AgentsEmitter:
                 source="adapter:openai_agents",
             )
         )
+        # pin_session=True keeps the SAFER session open across runs;
+        # the atexit hook closes it once.
+        if self._pin_session:
+            return
         # Close the session
         duration = (
             int((time.monotonic() - self._session_start_ts) * 1000)
@@ -473,6 +545,7 @@ def _build_run_hooks_class() -> type:
             agent_name: str | None = None,
             session_id: str | None = None,
             client: SaferClient | None = None,
+            pin_session: bool = False,
         ) -> None:
             super().__init__()
             self._emitter = _AgentsEmitter(
@@ -480,7 +553,13 @@ def _build_run_hooks_class() -> type:
                 agent_name=agent_name,
                 session_id=session_id,
                 safer_client=client,
+                pin_session=pin_session,
             )
+
+        def close_session(self, *, success: bool = True) -> None:
+            """Manually close the pinned chat session. No-op when
+            pin_session=False."""
+            self._emitter.close_session(success=success)
 
         @property
         def session_id(self) -> str:
@@ -668,12 +747,18 @@ def install_safer_for_agents(
     *,
     agent_id: str,
     agent_name: str | None = None,
+    pin_session: bool = False,
 ) -> Any:
     """One-call setup for SAFER + OpenAI Agents SDK.
 
     1. Registers a `SaferTracingProcessor` globally (idempotent — calling
        twice for the same agent_id is a no-op).
     2. Returns a `SaferRunHooks` instance to pass per-run.
+
+    With `pin_session=True` every `Runner.run(...)` invocation reuses the
+    same SAFER session_id and `on_session_end` is deferred to atexit —
+    use this for chat REPLs where you want one logical SAFER session per
+    conversation.
 
     Usage:
 
@@ -692,7 +777,11 @@ def install_safer_for_agents(
             ) from e
         add_trace_processor(SaferTracingProcessor(agent_id=agent_id, agent_name=agent_name))
         _REGISTERED_PROCESSORS.add(agent_id)
-    return SaferRunHooks(agent_id=agent_id, agent_name=agent_name)
+    return SaferRunHooks(
+        agent_id=agent_id,
+        agent_name=agent_name,
+        pin_session=pin_session,
+    )
 
 
 def _reset_for_tests() -> None:
