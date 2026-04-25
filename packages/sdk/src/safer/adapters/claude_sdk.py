@@ -880,18 +880,25 @@ class SaferAsyncAnthropic:
 
 
 def _is_async_anthropic(client: Any) -> bool:
-    """Return True if the given client is an `AsyncAnthropic` (or subclass)."""
+    """Return True if the given client is an `AsyncAnthropic` (or subclass).
+
+    Tries `isinstance(client, AsyncAnthropic)` first.  If the SDK isn't
+    importable or the isinstance check returns False, falls back to duck
+    typing: an async client's `messages.create` is a coroutine function.
+    Both checks run, so subclasses or test doubles are detected too."""
+    import inspect
+
     try:
         from anthropic import AsyncAnthropic
 
-        return isinstance(client, AsyncAnthropic)
-    except Exception:
-        # Fall back to duck typing
-        msgs = getattr(client, "messages", None)
-        create = getattr(msgs, "create", None) if msgs is not None else None
-        import inspect
-
-        return inspect.iscoroutinefunction(create) if create else False
+        if isinstance(client, AsyncAnthropic):
+            return True
+    except ImportError:
+        pass
+    # Duck typing — covers fakes and any other subclass we can't import
+    msgs = getattr(client, "messages", None)
+    create = getattr(msgs, "create", None) if msgs is not None else None
+    return inspect.iscoroutinefunction(create) if create else False
 
 
 def _summarize_messages(messages: list[Any]) -> str:

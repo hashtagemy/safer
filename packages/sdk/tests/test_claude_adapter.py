@@ -370,13 +370,21 @@ def test_async_anthropic_proxy_actually_awaits():
     """Critical regression: AsyncAnthropic.messages.create returns a coroutine
     that MUST be awaited.  Older sync proxy silently dropped the await,
     so the API call never went out and SAFER emitted bogus events with
-    zero tokens.  The async proxy MUST emit real after_llm_call data."""
+    zero tokens.  The async proxy MUST emit real after_llm_call data.
+
+    Uses the public README-documented integration path:
+        agent = wrap_anthropic(AsyncAnthropic())
+        await agent.messages.create(...)
+    """
     import asyncio
 
     client = safer.instrument(api_url="http://127.0.0.1:59999")
     events = _capture_events(client)
 
-    # Build a fake AsyncAnthropic-style client whose messages.create is async
+    # Async-shaped fake client.  `wrap_anthropic` detects the async coroutine
+    # signature on `messages.create` via duck typing and wires up
+    # `_AsyncMessagesProxy` automatically — same as it would for a real
+    # `AsyncAnthropic` instance.
     class _AsyncFakeMessages:
         async def create(self, **kwargs):
             return _mock_response("async hi", tokens_in=42, tokens_out=7)
@@ -385,30 +393,23 @@ def test_async_anthropic_proxy_actually_awaits():
         def __init__(self):
             self.messages = _AsyncFakeMessages()
 
-    # Pretend it's an AsyncAnthropic — use duck typing
+    fake = _AsyncFakeAnthropic()
+    agent = wrap_anthropic(fake, agent_id="async_test", agent_name="Async Test")
+
+    # Sanity: the public wrap detected the async client and installed an
+    # async messages proxy — `agent.messages.create` is now a coroutine fn
+    import inspect as _inspect
+
+    assert _inspect.iscoroutinefunction(agent.messages.create), (
+        "wrap_anthropic must install an async proxy when the underlying "
+        "client.messages.create is a coroutine function"
+    )
+
     async def run():
-        # Manually construct AnthropicTracker bypassing the isinstance check
-        from safer.adapters.claude_sdk import _AsyncMessagesProxy, AnthropicTracker
-
-        fake = _AsyncFakeAnthropic()
-        tracker = AnthropicTracker.__new__(AnthropicTracker)
-        # Initialize the emitter base
-        from safer.adapters.claude_sdk import _AnthropicEventEmitter
-
-        _AnthropicEventEmitter.__init__(
-            tracker,
-            agent_id="async_test",
-            agent_name="async_test",
-            session_id=None,
-            safer_client=None,
-        )
-        tracker._client = fake
-        tracker.messages = _AsyncMessagesProxy(fake.messages, tracker)
-        result = await tracker.messages.create(
+        return await agent.messages.create(
             model="claude-haiku-4-5",
             messages=[{"role": "user", "content": "ping"}],
         )
-        return result
 
     result = asyncio.run(run())
     assert result is not None

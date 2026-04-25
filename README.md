@@ -297,54 +297,90 @@ agent_executor.invoke({"input": "..."},
 Native layer: LangChain `BaseCallbackHandler`. All 9 SAFER hooks emit
 automatically — no manual helpers required.
 
-#### Anthropic (raw SDK) — OpenTelemetry bridge (recommended)
+#### Anthropic (raw SDK) — `SaferAnthropic` subclass (recommended)
 
 ```python
-from safer.adapters.otel import configure_otel_bridge
+from safer.adapters.claude_sdk import SaferAnthropic
 
-configure_otel_bridge(agent_id="support", agent_name="Support",
-                      instrument=["anthropic"])
-# Every Anthropic() call from here on is observed by SAFER.
+client = SaferAnthropic(agent_id="support", agent_name="Support")
+client.messages.create(model="claude-opus-4-7", messages=[...])
 ```
 
-Needs `pip install 'safer-sdk[otel-anthropic]'`. This installs
-`opentelemetry-instrumentation-anthropic`, which emits GenAI spans for
-`messages.create` and tool calls; SAFER's `/v1/traces` parses them
-into all 9 hooks. No `wrap_anthropic`, no manual helpers.
+`SaferAnthropic` is a real `anthropic.Anthropic` subclass — every API
+the SDK exposes still works.  All nine SAFER hooks fire automatically:
+LLM-call pair, tool-use auto-detection from `Message.content`, and
+`after_tool_use` synthesised on the next request when its `messages`
+array carries a matching `tool_result` block.  Use `SaferAsyncAnthropic`
+for `async`/`await` code.
 
-#### OpenAI (raw SDK) — OpenTelemetry bridge (recommended)
+#### Anthropic (raw SDK) — `wrap_anthropic` (existing client wrapper)
 
-```python
-from safer.adapters.otel import configure_otel_bridge
-
-configure_otel_bridge(agent_id="assistant", agent_name="Assistant",
-                      instrument=["openai"])
-# Every OpenAI().chat.completions.create from here on is observed.
-```
-
-Needs `pip install 'safer-sdk[otel-openai]'`. Same story via
-`opentelemetry-instrumentation-openai`.
-
-#### Anthropic / OpenAI — low-level client proxy (alternative)
-
-If you don't want the OTel dep, the legacy client-proxy adapter gives
-you the LLM-call pair automatically and manual helpers for the rest:
+If you already have an `Anthropic()` instance you want to keep:
 
 ```python
 from anthropic import Anthropic
 from safer.adapters.claude_sdk import wrap_anthropic
 
-client = Anthropic()
-agent = wrap_anthropic(client, agent_id="support", agent_name="Support")
-agent.start_session()
-agent.messages.create(model="claude-opus-4-7", messages=[...])
-agent.before_tool_use("get_order", {"id": 123}); ...; agent.after_tool_use(...)
-agent.final_output("Your order has shipped."); agent.end_session()
+client = wrap_anthropic(Anthropic(), agent_id="support", agent_name="Support")
+client.messages.create(model="claude-opus-4-7", messages=[...])
 ```
 
-Emits `before_llm_call` + `after_llm_call` + `on_session_start`
-automatically; the rest are manual helpers. For zero-config full
-coverage, prefer the OTel bridge above.
+Same automatic hook coverage as `SaferAnthropic` (tool_use detection +
+tool_result pairing).  Detects `AsyncAnthropic` automatically and
+returns an async-aware proxy.
+
+#### OpenAI (raw SDK) — `wrap_openai`
+
+```python
+from openai import OpenAI
+from safer.adapters.openai_client import wrap_openai
+
+client = wrap_openai(OpenAI(), agent_id="assistant", agent_name="Assistant")
+client.chat.completions.create(model="gpt-4o", messages=[...])
+```
+
+Only LLM endpoints are instrumented — `chat.completions.create/parse`,
+`responses.create`, plus their `with_raw_response` and
+`with_streaming_response` siblings.  Embeddings, files, images, batches
+pass through unchanged.  Streaming responses are accumulated chunk-by-
+chunk so `after_llm_call` carries real tool-call + usage data; tool
+calls in the response auto-emit `before_tool_use`, paired with
+`after_tool_use` when the next request carries the `role="tool"` reply.
+`AsyncOpenAI` detected automatically.
+
+#### OpenAI Agents SDK — `install_safer_for_agents`
+
+```python
+from agents import Runner
+from safer.adapters.openai_agents import install_safer_for_agents
+
+hooks = install_safer_for_agents(agent_id="repo_analyst",
+                                  agent_name="Repo Analyst")
+result = await Runner.run(agent, "task", hooks=hooks)
+```
+
+Registers a global `TracingProcessor` (idempotent) and returns a
+`SaferRunHooks` instance for the run.  Native layer: the SDK's
+first-class `RunHooks` + `TracingProcessor` surface — handoffs,
+guardrails, and multi-agent runs all flow through.
+
+#### OpenTelemetry bridge (opt-in alternative)
+
+If you already run an OTel pipeline and prefer the OpenLLMetry
+instrumentor over SAFER's native client wrappers:
+
+```python
+from safer.adapters.otel import configure_otel_bridge
+
+configure_otel_bridge(agent_id="support", instrument=["anthropic"])
+# or instrument=["openai"]
+```
+
+Needs `pip install 'safer-sdk[otel-anthropic]'` (or `[otel-openai]`).
+Coverage is more limited than the native wrappers above (see the
+hook-coverage table below) — the user-side tool execution isn't
+OTel-instrumented, so `before/after_tool_use` only fires for tools the
+underlying instrumentor sees.
 
 #### Vanilla Python (no framework) — manual
 
