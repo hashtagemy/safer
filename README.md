@@ -556,18 +556,26 @@ Hard rules (also in [`CLAUDE.md`](CLAUDE.md)):
 
 ## Examples
 
+Every example opens an interactive **chat REPL by default** so you
+can talk to the agent while watching SAFER's `/live` dashboard. Pass
+`--prompt "..."` to any of them for a one-shot run instead.
+
 | Path | Framework | Demo |
 |---|---|---|
-| [`examples/google-adk`](examples/google-adk) | Google ADK + Gemini | Repo Analyst agent via `Runner(plugins=[SaferAdkPlugin(...)])` — 10/10 SAFER hooks automatic |
-| [`examples/strands`](examples/strands) | Strands Agents + Anthropic | System Diagnostic agent via `Agent(hooks=[SaferHookProvider(...)])` with real `ps` / `df` / log tools + a dangerous `run_shell` for policy demos |
-| [`examples/anthropic-otel`](examples/anthropic-otel) | Raw Anthropic SDK + OTel bridge | Tool-calling loop observed via `configure_otel_bridge(instrument=["anthropic"])` — see hook coverage table for current OTel limits |
-| [`examples/openai-otel`](examples/openai-otel) | Raw OpenAI SDK + OTel bridge | `summarize_url` tool loop observed via `configure_otel_bridge(instrument=["openai"])` |
-| [`examples/customer-support`](examples/customer-support) | Anthropic Claude Agent SDK (low-level client proxy) | Customer-support bot with intentionally risky tools — demo for `wrap_anthropic` + manual helpers |
-| [`examples/code-analyst`](examples/code-analyst) | LangChain + `langchain-anthropic` | Tool-calling agent that reads / greps / AST-scans this repo; shows `SaferCallbackHandler` end-to-end |
-| [`examples/vanilla-python`](examples/vanilla-python) | None (custom SDK) | Minimal 60-line manual instrumentation using `safer.track_event()` |
-| [`examples/coding_assistant`](examples/coding_assistant) | Anthropic Agent SDK supervisor + worker | Multi-agent chat with 6 tools and 4 deliberate security flaws — exercises `/live` parent/child sessions, Inspector findings, Gateway block path |
+| [`examples/code-analyst`](examples/code-analyst) ★ | LangChain + `langchain-anthropic` | Code Analyst chat agent (7 tools — read / grep / AST / git_log / ...) via `SaferCallbackHandler` |
+| [`examples/coding_assistant`](examples/coding_assistant) ★ | Claude Agent SDK supervisor + worker | Multi-agent chat with 9 worker tools (fs / web / shell / git) and 4 deliberate security flaws — exercises `/live` parent/child sessions, Inspector findings, Gateway block path |
+| [`examples/google-adk`](examples/google-adk) | Google ADK + Gemini | Same 7-tool Repo Analyst chat via `Runner(plugins=[SaferAdkPlugin(...)])` — 10/10 SAFER hooks automatic |
+| [`examples/strands`](examples/strands) | Strands Agents + Anthropic | System Diagnostic chat (8 tools — ps / df / vm_stat / lsof / du / uptime / log tail / run_shell) via `Agent(hooks=[SaferHookProvider(...)])` |
+| [`examples/anthropic-otel`](examples/anthropic-otel) | Raw Anthropic SDK + OTel bridge | Research Assistant chat (6 tools — Wikipedia search / fetch / extract links / notes) via `configure_otel_bridge(instrument=["anthropic"])` |
+| [`examples/openai-otel`](examples/openai-otel) | Raw OpenAI SDK + OTel bridge | Same 6-tool Research Assistant chat via `configure_otel_bridge(instrument=["openai"])` |
+| [`examples/openai-agents`](examples/openai-agents) | OpenAI Agents SDK | Multi-specialist triage chat (math / geo / weather, 8 tools total) via `install_safer_for_agents(...)` |
+| [`examples/customer-support`](examples/customer-support) | Anthropic Claude Agent SDK (low-level client proxy) | Customer support chat over a 12 customer × 30 order mock store, 6 tools (orders / refund / email) — demo for `wrap_anthropic` + manual helpers |
+| [`examples/vanilla-python`](examples/vanilla-python) | None (custom SDK) | Manual `safer.track_event(...)` REPL — for frameworks that have no bundled adapter |
 
-Each example has its own `README.md` with prereqs and run commands.
+★ = recommended starting points for a first walkthrough.
+
+Each example has its own `README.md` with prereqs, run commands, and
+a "Prompts to try" list.
 
 ---
 

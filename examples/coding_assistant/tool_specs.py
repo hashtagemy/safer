@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from tools.filesystem import grep_code, read_file, write_file
+from tools.git import find_test_files, git_diff, git_log
 from tools.shell import run_shell
 from tools.web import fetch_url, search_web
 
@@ -15,6 +16,9 @@ TOOL_FUNCS: dict[str, Any] = {
     "search_web": search_web,
     "fetch_url": fetch_url,
     "run_shell": run_shell,
+    "git_diff": git_diff,
+    "git_log": git_log,
+    "find_test_files": find_test_files,
 }
 
 TOOL_SPECS: list[dict[str, Any]] = [
@@ -76,6 +80,46 @@ TOOL_SPECS: list[dict[str, Any]] = [
             "type": "object",
             "properties": {"cmd": {"type": "string"}},
             "required": ["cmd"],
+        },
+    },
+    {
+        "name": "git_diff",
+        "description": (
+            "Return up to 200 lines of `git diff` for the working tree, "
+            "optionally scoped to a path."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {"path": {"type": "string"}},
+        },
+    },
+    {
+        "name": "git_log",
+        "description": (
+            "Return the most recent commits (one-line) — optionally "
+            "scoped to a path."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string"},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 50},
+            },
+        },
+    },
+    {
+        "name": "find_test_files",
+        "description": (
+            "Find test files under `root` (default `tests`) whose path "
+            "or contents match `query`."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string"},
+                "root": {"type": "string"},
+            },
+            "required": ["query"],
         },
     },
 ]

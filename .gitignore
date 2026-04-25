@@ -69,3 +69,6 @@ docs/demo-assets/*.mp4
 # Misc
 .cache/
 tmp/
+
+# Per-example scratch directories
+examples/**/.notes/

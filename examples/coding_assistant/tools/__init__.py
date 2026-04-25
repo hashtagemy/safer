@@ -7,6 +7,7 @@ exercises the Inspector's deterministic pattern rules end-to-end.
 """
 
 from tools.filesystem import grep_code, read_file, write_file
+from tools.git import find_test_files, git_diff, git_log
 from tools.shell import run_shell
 from tools.web import fetch_url, search_web
 
@@ -17,4 +18,7 @@ __all__ = [
     "search_web",
     "fetch_url",
     "run_shell",
+    "git_diff",
+    "git_log",
+    "find_test_files",
 ]
