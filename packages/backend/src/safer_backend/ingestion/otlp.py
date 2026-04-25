@@ -300,6 +300,13 @@ class _TraceState:
     last_sequence: int = 0
     agent_id: str = "otel-agent"
     agent_name: str = "otel-agent"
+    # tool_call_id → tool_name; populated when a chat span carries
+    # `gen_ai.tool.call.id` (the model decided to call a tool), drained
+    # when a subsequent chat span emits a `gen_ai.tool.message` event
+    # for the same id (the user fed the tool's result back).  This lets
+    # the OTLP parser pair the two halves into `before/after_tool_use`
+    # events even though no `execute_tool` span exists.
+    pending_tool_calls: dict[str, str] = field(default_factory=dict)
 
 
 class TraceTracker:
@@ -345,6 +352,20 @@ class TraceTracker:
             state = self._state.setdefault(trace_id, _TraceState())
             state.agent_id = agent_id
             state.agent_name = agent_name
+
+    def remember_tool_call(self, trace_id: str, call_id: str, tool_name: str) -> None:
+        """Record an in-flight tool call detected from the chat span's
+        `gen_ai.tool.call.id` attribute.  Pairs with `pop_tool_call` when
+        the matching `gen_ai.tool.message` event arrives later."""
+        with self._lock:
+            state = self._state.setdefault(trace_id, _TraceState())
+            state.pending_tool_calls[call_id] = tool_name
+
+    def pop_tool_call(self, trace_id: str, call_id: str) -> str | None:
+        """Drain a pending tool call by id; returns the tool name or None."""
+        with self._lock:
+            state = self._state.setdefault(trace_id, _TraceState())
+            return state.pending_tool_calls.pop(call_id, None)
 
     def forget(self, trace_id: str) -> None:
         with self._lock:
@@ -459,11 +480,13 @@ def map_genai_span_to_safer(
         # Best-effort tool_use synthesis — when the chat span carries a
         # `gen_ai.tool.call.id` attribute (Anthropic instrumentor emits
         # this on the parent span when the model returns a tool_use block),
-        # synthesize an on_agent_decision so SAFER's Multi-Persona Judge
-        # routes correctly even though the user's tool execution itself
-        # is not OTel-instrumented.
+        # synthesize an on_agent_decision + before_tool_use so SAFER's
+        # Multi-Persona Judge routes correctly even though the user's
+        # tool execution itself is not OTel-instrumented.
         tc_id = span.attributes.get("gen_ai.tool.call.id")
-        tc_name = span.attributes.get("gen_ai.tool.call.name") or span.attributes.get("gen_ai.tool.name")
+        tc_name = span.attributes.get("gen_ai.tool.call.name") or span.attributes.get(
+            "gen_ai.tool.name"
+        )
         if isinstance(tc_id, str) and tc_id and isinstance(tc_name, str) and tc_name:
             events.append(
                 OnAgentDecisionPayload(
@@ -472,6 +495,66 @@ def map_genai_span_to_safer(
                     sequence=t.next_sequence(span.trace_id),
                     decision_type="tool_call",
                     chosen_action=tc_name,
+                    source="otlp",
+                )
+            )
+            # Track this call so a later `gen_ai.tool.message` event in
+            # the same trace can pair into an after_tool_use.
+            t.remember_tool_call(span.trace_id, tc_id, tc_name)
+            # Also synthesize before_tool_use so the Gateway / Judge tool
+            # personas have a hook to run on (the actual tool execution
+            # happens in user code which OTel doesn't see).
+            tool_input_attr = span.attributes.get("gen_ai.tool.call.arguments") or span.attributes.get(
+                "gen_ai.tool.input"
+            )
+            tool_input: dict[str, Any] = {}
+            if isinstance(tool_input_attr, str):
+                try:
+                    import json as _json
+
+                    parsed = _json.loads(tool_input_attr)
+                    tool_input = parsed if isinstance(parsed, dict) else {"value": parsed}
+                except Exception:
+                    tool_input = {"_raw": tool_input_attr}
+            elif isinstance(tool_input_attr, dict):
+                tool_input = dict(tool_input_attr)
+            events.append(
+                BeforeToolUsePayload(
+                    session_id=session_id,
+                    agent_id=agent_id,
+                    sequence=t.next_sequence(span.trace_id),
+                    tool_name=tc_name,
+                    args=tool_input,
+                    source="otlp",
+                )
+            )
+
+        # Pair tool results — chat spans on the *next* call carry
+        # `gen_ai.tool.message` events whose attributes include the
+        # tool_call_id and the result content.  Every such event matched
+        # against a pending call (set above on the previous span) becomes
+        # an after_tool_use.
+        for ev in span.events:
+            if ev["name"] != "gen_ai.tool.message":
+                continue
+            attrs = ev.get("attributes") or {}
+            ev_call_id = attrs.get("id") or attrs.get("tool_call_id") or attrs.get(
+                "gen_ai.tool.call.id"
+            )
+            if not isinstance(ev_call_id, str) or not ev_call_id:
+                continue
+            tool_name = t.pop_tool_call(span.trace_id, ev_call_id)
+            if not tool_name:
+                continue
+            content = attrs.get("content") or attrs.get("output") or ""
+            events.append(
+                AfterToolUsePayload(
+                    session_id=session_id,
+                    agent_id=agent_id,
+                    sequence=t.next_sequence(span.trace_id),
+                    tool_name=tool_name,
+                    result=str(content)[:4000],
+                    duration_ms=0,  # OTel doesn't expose user-side tool latency
                     source="otlp",
                 )
             )

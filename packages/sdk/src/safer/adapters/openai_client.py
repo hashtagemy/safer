@@ -940,6 +940,213 @@ class _AsyncStreamWrapper:
         return getattr(self._stream, name)
 
 
+# ---------- with_streaming_response wrapping -------------------------------
+
+
+def _dict_to_namespace(d: Any) -> Any:
+    """Recursively convert a dict (e.g. parsed SSE chunk) into a SimpleNamespace
+    so the chat-stream accumulator can attribute-access fields the same way
+    it does for real `ChatCompletionChunk` objects."""
+    from types import SimpleNamespace
+
+    if isinstance(d, dict):
+        return SimpleNamespace(**{k: _dict_to_namespace(v) for k, v in d.items()})
+    if isinstance(d, list):
+        return [_dict_to_namespace(item) for item in d]
+    return d
+
+
+class _WithStreamingResponseProxy:
+    """Wraps an APIResponse from `with_streaming_response.create()`.
+
+    Forwards every attribute access (`.headers`, `.status_code`, `.parse()`,
+    ...) to the real response, but intercepts the SSE iteration methods so
+    we can accumulate chunks for the `after_llm_call` emission on `__exit__`.
+
+    OpenAI's SSE format yields lines like `data: {...}` (one JSON-encoded
+    chunk per `data:` line, plus a `data: [DONE]` terminator).  We decode
+    each line and feed the parsed dict to the chat-stream accumulator —
+    same code path as `_SyncStreamWrapper` for direct `stream=True` calls."""
+
+    def __init__(self, response: Any, accumulator: Any) -> None:
+        self._response = response
+        self._accumulator = accumulator
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._response, name)
+
+    def parse(self, *args: Any, **kwargs: Any) -> Any:
+        """Pass-through .parse() — also feeds the accumulator with the
+        parsed final response when the user calls `.parse()` directly
+        (the SDK does this for non-stream uses of with_streaming_response)."""
+        parsed = self._response.parse(*args, **kwargs)
+        try:
+            self._accumulator.feed(parsed) if hasattr(self._accumulator, "feed") else None
+        except Exception:
+            pass
+        return parsed
+
+    def iter_lines(self, *args: Any, **kwargs: Any):
+        for line in self._response.iter_lines(*args, **kwargs):
+            self._feed_line(line)
+            yield line
+
+    def iter_text(self, *args: Any, **kwargs: Any):
+        # `iter_text` concatenates lines into arbitrary text chunks.  We
+        # buffer across yielded chunks because a single SSE event may be
+        # split mid-line.
+        buffer = ""
+        for chunk in self._response.iter_text(*args, **kwargs):
+            yield chunk  # pass through to user immediately
+            buffer += chunk
+            while "\n" in buffer:
+                line, buffer = buffer.split("\n", 1)
+                self._feed_line(line)
+
+    def iter_events(self, *args: Any, **kwargs: Any):
+        # `iter_events` is the SDK's typed event API — already parsed
+        # ChatCompletionChunk-like objects.
+        for event in self._response.iter_events(*args, **kwargs):
+            try:
+                self._accumulator.feed(event)
+            except Exception:
+                pass
+            yield event
+
+    def iter_bytes(self, *args: Any, **kwargs: Any):
+        # `iter_bytes` is fully raw; we don't try to parse partial bytes.
+        # Caller responsibility for decoding.  Pass through as-is.
+        return self._response.iter_bytes(*args, **kwargs)
+
+    def _feed_line(self, line: Any) -> None:
+        """Decode an SSE line of the form `data: {...}` and feed the
+        parsed JSON to the accumulator."""
+        if isinstance(line, bytes):
+            try:
+                line = line.decode("utf-8", errors="replace")
+            except Exception:
+                return
+        if not isinstance(line, str):
+            return
+        s = line.strip()
+        if not s.startswith("data:"):
+            return
+        data = s[len("data:") :].strip()
+        if not data or data == "[DONE]":
+            return
+        try:
+            parsed = json.loads(data)
+        except Exception:
+            return
+        try:
+            self._accumulator.feed(_dict_to_namespace(parsed))
+        except Exception:
+            pass
+
+
+class _AsyncWithStreamingResponseProxy(_WithStreamingResponseProxy):
+    """Async sibling — exposes `aiter_lines`, `aiter_text`, `aiter_events`."""
+
+    async def aiter_lines(self, *args: Any, **kwargs: Any):
+        async for line in self._response.iter_lines(*args, **kwargs):
+            self._feed_line(line)
+            yield line
+
+    async def aiter_text(self, *args: Any, **kwargs: Any):
+        buffer = ""
+        async for chunk in self._response.iter_text(*args, **kwargs):
+            yield chunk
+            buffer += chunk
+            while "\n" in buffer:
+                line, buffer = buffer.split("\n", 1)
+                self._feed_line(line)
+
+    async def aiter_events(self, *args: Any, **kwargs: Any):
+        async for event in self._response.iter_events(*args, **kwargs):
+            try:
+                self._accumulator.feed(event)
+            except Exception:
+                pass
+            yield event
+
+    async def aparse(self, *args: Any, **kwargs: Any) -> Any:
+        parsed = await self._response.parse(*args, **kwargs)
+        try:
+            self._accumulator.feed(parsed) if hasattr(self._accumulator, "feed") else None
+        except Exception:
+            pass
+        return parsed
+
+
+class _WithStreamingResponseWrapper:
+    """Wraps the context manager returned by
+    `client.chat.completions.with_streaming_response.create(...)` (sync).
+
+    On `__enter__`, returns a proxy that forwards to the real APIResponse
+    while accumulating SSE chunks.  On `__exit__`, emits the assembled
+    `after_llm_call` event."""
+
+    def __init__(
+        self,
+        manager: Any,
+        emitter: "_OpenAIEmitter",
+        kwargs: dict[str, Any],
+        path: list[str],
+        t0: float,
+    ) -> None:
+        self._manager = manager
+        self._emitter = emitter
+        self._kwargs = kwargs
+        self._path = path
+        self._t0 = t0
+        self._accumulator = _make_stream_accumulator(_api_kind_for_path(path))
+        self._closed = False
+        self._proxy: _WithStreamingResponseProxy | None = None
+
+    def __enter__(self) -> Any:
+        response = self._manager.__enter__()
+        self._proxy = _WithStreamingResponseProxy(response, self._accumulator)
+        return self._proxy
+
+    def __exit__(self, exc_type, exc, tb) -> Any:
+        try:
+            self._close(exc=exc)
+        finally:
+            return self._manager.__exit__(exc_type, exc, tb)
+
+    def _close(self, *, exc: BaseException | None = None) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        latency_ms = int((time.monotonic() - self._t0) * 1000)
+        if exc is not None:
+            self._emitter.emit_error("LLMStreamError", str(exc))
+            return
+        try:
+            response = self._accumulator.to_response()
+            if response is not None:
+                self._emitter.emit_after_llm(
+                    self._kwargs, response, latency_ms, self._path
+                )
+        except Exception as e:  # pragma: no cover
+            log.debug("with_streaming_response emit failed: %s", e)
+
+
+class _AsyncWithStreamingResponseWrapper(_WithStreamingResponseWrapper):
+    """Async sibling — supports `async with`."""
+
+    async def __aenter__(self) -> Any:
+        response = await self._manager.__aenter__()
+        self._proxy = _AsyncWithStreamingResponseProxy(response, self._accumulator)
+        return self._proxy
+
+    async def __aexit__(self, exc_type, exc, tb) -> Any:
+        try:
+            self._close(exc=exc)
+        finally:
+            return await self._manager.__aexit__(exc_type, exc, tb)
+
+
 # ---------- with_raw_response wrapping --------------------------------------
 
 
@@ -1041,11 +1248,18 @@ class _OpenAIAdapter:
                 except Exception as e:
                     emitter.emit_error("LLMCallError", str(e))
                     raise
+                # `with_streaming_response.create` (async) — returns an
+                # async context manager.  Wrap it so we accumulate SSE
+                # chunks across the user's `async with` block.
+                if is_streaming_path:
+                    return _AsyncWithStreamingResponseWrapper(
+                        response, emitter, kwargs, path, t0
+                    )
                 latency_ms = int((time.monotonic() - t0) * 1000)
-                # Streaming?
+                # Direct streaming (`stream=True` on chat.completions.create)
                 if kwargs.get("stream"):
                     return _AsyncStreamWrapper(response, emitter, kwargs, path, t0)
-                # with_raw_response: unwrap
+                # with_raw_response: unwrap LegacyAPIResponse via .parse()
                 if is_with_raw:
                     parsed = _unwrap_raw_response(response)
                     if parsed is not None:
@@ -1064,13 +1278,15 @@ class _OpenAIAdapter:
             except Exception as e:
                 emitter.emit_error("LLMCallError", str(e))
                 raise
-            # `with_streaming_response.create` returns a context-managed
-            # streaming response.  We can't easily wrap it in a Stream
-            # accumulator (the SDK's wrapper has its own protocol), so we
-            # let it pass through and emit nothing — production users on
-            # this path should handle their own observability via headers.
+            # `with_streaming_response.create` returns a context manager that
+            # yields an `APIResponse`.  We wrap it so we can accumulate SSE
+            # chunks the user iterates via response.iter_lines/iter_events
+            # and emit `after_llm_call` on context exit with the assembled
+            # final ChatCompletion / Response.
             if is_streaming_path:
-                return response
+                return _WithStreamingResponseWrapper(
+                    response, emitter, kwargs, path, t0
+                )
             if kwargs.get("stream"):
                 return _SyncStreamWrapper(response, emitter, kwargs, path, t0)
             latency_ms = int((time.monotonic() - t0) * 1000)

@@ -542,3 +542,270 @@ def test_cache_read_tokens_propagated(recording_client):
     # Billable input = 100 - 80 = 20; cost = (20 * 0.15 + 80 * 0.075 + 20 * 0.60) / 1M
     expected = (20 * 0.15 + 80 * 0.075 + 20 * 0.60) / 1_000_000
     assert abs(after["payload"]["cost_usd"] - expected) < 1e-9
+
+
+# ----- with_streaming_response wrapping (35.7m) ----------------------------
+
+
+class _FakeAPIResponseStream:
+    """Minimal stand-in for OpenAI's APIResponse returned by
+    with_streaming_response.  Provides iter_lines that yields SSE-format lines."""
+
+    def __init__(self, sse_chunks: list[dict], headers: dict | None = None):
+        # Each chunk in sse_chunks is a dict matching ChatCompletionChunk shape;
+        # we serialize as `data: {json}\n` per OpenAI SSE convention, plus a
+        # trailing `data: [DONE]`.
+        self._sse_chunks = sse_chunks
+        self.headers = headers or {"x-request-id": "req_stream_test"}
+        self.status_code = 200
+
+    def iter_lines(self):
+        for chunk in self._sse_chunks:
+            yield f"data: {json.dumps(chunk)}"
+            yield ""  # blank line separator (per SSE spec)
+        yield "data: [DONE]"
+
+
+class _FakeStreamingResponseManager:
+    """Stand-in for the context manager returned by
+    `with_streaming_response.create()`."""
+
+    def __init__(self, response: _FakeAPIResponseStream):
+        self._response = response
+
+    def __enter__(self):
+        return self._response
+
+    def __exit__(self, exc_type, exc, tb):
+        return None
+
+
+def test_with_streaming_response_accumulates_chunks_from_iter_lines(recording_client):
+    """`with_streaming_response.create(stream=True)` returns a context
+    manager whose APIResponse exposes `iter_lines()` (SSE).  The adapter
+    must intercept iteration, accumulate chunks, and emit a real
+    `after_llm_call` on context exit — not pass through silently."""
+    from safer.adapters.openai_client import wrap_openai
+
+    sse_chunks = [
+        {
+            "id": "chatcmpl_ws",
+            "model": "gpt-4o",
+            "choices": [
+                {"delta": {"content": "Hello "}, "finish_reason": None}
+            ],
+            "usage": None,
+        },
+        {
+            "id": "chatcmpl_ws",
+            "model": "gpt-4o",
+            "choices": [
+                {"delta": {"content": "stream!"}, "finish_reason": "stop"}
+            ],
+            "usage": None,
+        },
+        {
+            "id": "chatcmpl_ws",
+            "model": "gpt-4o",
+            "choices": [],
+            "usage": {
+                "prompt_tokens": 7,
+                "completion_tokens": 3,
+                "prompt_tokens_details": None,
+            },
+        },
+    ]
+
+    api_response = _FakeAPIResponseStream(sse_chunks)
+    manager = _FakeStreamingResponseManager(api_response)
+
+    fake = SimpleNamespace(
+        chat=SimpleNamespace(
+            completions=SimpleNamespace(
+                with_streaming_response=SimpleNamespace(create=lambda **kw: manager),
+                create=lambda **kw: None,
+            )
+        )
+    )
+    client = wrap_openai(fake, agent_id="ws_iter_lines")
+
+    consumed_lines: list[str] = []
+    with client.chat.completions.with_streaming_response.create(
+        model="gpt-4o", messages=[{"role": "user", "content": "hi"}], stream=True
+    ) as response:
+        # Headers + status should still be accessible (proxy passthrough)
+        assert response.headers["x-request-id"] == "req_stream_test"
+        assert response.status_code == 200
+        for line in response.iter_lines():
+            consumed_lines.append(line)
+
+    # User received raw SSE lines untouched
+    assert any("Hello" in l for l in consumed_lines)
+    assert any("[DONE]" in l for l in consumed_lines)
+
+    # SAFER emitted before + after with assembled text + usage
+    after = next(c for c in recording_client if c["hook"] == "after_llm_call")
+    assert after["payload"]["response"] == "Hello stream!"
+    assert after["payload"]["tokens_in"] == 7
+    assert after["payload"]["tokens_out"] == 3
+    expected_cost = (7 * 2.50 + 3 * 10.0) / 1_000_000
+    assert abs(after["payload"]["cost_usd"] - expected_cost) < 1e-9
+
+
+def test_with_streaming_response_iter_text_buffers_partial_lines(recording_client):
+    """`iter_text` may split a single SSE event mid-line.  The proxy must
+    buffer across chunks and feed complete lines to the accumulator."""
+    from safer.adapters.openai_client import wrap_openai
+
+    chunk_dict = {
+        "id": "cs",
+        "model": "gpt-4o-mini",
+        "choices": [{"delta": {"content": "buffered"}, "finish_reason": "stop"}],
+        "usage": None,
+    }
+
+    class _PartialAPIResponse:
+        headers = {"x-request-id": "buf"}
+        status_code = 200
+        def iter_text(self):
+            full = f"data: {json.dumps(chunk_dict)}\ndata: [DONE]\n"
+            # Split mid-byte pattern to exercise the buffer
+            yield full[:10]
+            yield full[10:30]
+            yield full[30:]
+
+    class _Manager:
+        def __enter__(self): return _PartialAPIResponse()
+        def __exit__(self, *_): return None
+
+    fake = SimpleNamespace(
+        chat=SimpleNamespace(
+            completions=SimpleNamespace(
+                with_streaming_response=SimpleNamespace(create=lambda **kw: _Manager()),
+                create=lambda **kw: None,
+            )
+        )
+    )
+    client = wrap_openai(fake, agent_id="ws_iter_text")
+    received = []
+    with client.chat.completions.with_streaming_response.create(
+        model="gpt-4o-mini", messages=[], stream=True
+    ) as response:
+        for chunk in response.iter_text():
+            received.append(chunk)
+
+    # User saw the original byte chunks
+    assert "".join(received).startswith("data: ")
+
+    # SAFER reconstructed the SSE event via the buffer
+    after = next(c for c in recording_client if c["hook"] == "after_llm_call")
+    assert after["payload"]["response"] == "buffered"
+
+
+def test_with_streaming_response_async_context_manager(recording_client):
+    """async with client.chat.completions.with_streaming_response.create(...)"""
+    from safer.adapters.openai_client import wrap_openai
+
+    sse_chunks = [
+        {
+            "id": "cs_async",
+            "model": "gpt-4o",
+            "choices": [{"delta": {"content": "async"}, "finish_reason": "stop"}],
+            "usage": None,
+        },
+        {
+            "id": "cs_async",
+            "model": "gpt-4o",
+            "choices": [],
+            "usage": {"prompt_tokens": 5, "completion_tokens": 1, "prompt_tokens_details": None},
+        },
+    ]
+
+    class _AsyncAPIResponse:
+        headers = {"x-request-id": "async_req"}
+        status_code = 200
+        async def iter_lines(self):
+            for ch in sse_chunks:
+                yield f"data: {json.dumps(ch)}"
+            yield "data: [DONE]"
+
+    class _AsyncManager:
+        async def __aenter__(self):
+            return _AsyncAPIResponse()
+        async def __aexit__(self, *_):
+            return None
+
+    async def async_create(**kwargs):
+        return _AsyncManager()
+
+    fake = SimpleNamespace(
+        chat=SimpleNamespace(
+            completions=SimpleNamespace(
+                with_streaming_response=SimpleNamespace(create=async_create),
+                create=lambda **kw: None,
+            )
+        )
+    )
+    client = wrap_openai(fake, agent_id="ws_async")
+
+    async def run():
+        manager = await client.chat.completions.with_streaming_response.create(
+            model="gpt-4o", messages=[], stream=True
+        )
+        consumed = []
+        async with manager as response:
+            assert response.headers["x-request-id"] == "async_req"
+            async for line in response.aiter_lines():
+                consumed.append(line)
+        return consumed
+
+    consumed = asyncio.run(run())
+    assert any("async" in l for l in consumed)
+
+    after = next(c for c in recording_client if c["hook"] == "after_llm_call")
+    assert after["payload"]["response"] == "async"
+    assert after["payload"]["tokens_in"] == 5
+    assert after["payload"]["tokens_out"] == 1
+
+
+def test_with_streaming_response_context_manager_emits_after_on_exit(recording_client):
+    """Regression: earlier the wrap path returned the manager unmodified
+    and emitted nothing.  Confirm both before_llm_call and after_llm_call
+    fire across the with block, and after_llm_call carries real metadata."""
+    from safer.adapters.openai_client import wrap_openai
+
+    sse_chunks = [
+        {
+            "id": "x",
+            "model": "gpt-4o-mini",
+            "choices": [{"delta": {"content": "ok"}, "finish_reason": "stop"}],
+            "usage": None,
+        },
+        {
+            "id": "x",
+            "model": "gpt-4o-mini",
+            "choices": [],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "prompt_tokens_details": None},
+        },
+    ]
+    api_response = _FakeAPIResponseStream(sse_chunks)
+    manager = _FakeStreamingResponseManager(api_response)
+
+    fake = SimpleNamespace(
+        chat=SimpleNamespace(
+            completions=SimpleNamespace(
+                with_streaming_response=SimpleNamespace(create=lambda **kw: manager),
+                create=lambda **kw: None,
+            )
+        )
+    )
+    client = wrap_openai(fake, agent_id="ws_event_pair")
+
+    with client.chat.completions.with_streaming_response.create(
+        model="gpt-4o-mini", messages=[], stream=True
+    ) as response:
+        list(response.iter_lines())  # consume
+
+    hooks = [c["hook"] for c in recording_client]
+    assert hooks.count("before_llm_call") == 1
+    assert hooks.count("after_llm_call") == 1

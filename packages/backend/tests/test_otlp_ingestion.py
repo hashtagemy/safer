@@ -302,6 +302,104 @@ def test_chat_span_without_tool_call_id_does_NOT_synthesize_decision():
     assert "on_agent_decision" not in hook_names
 
 
+def test_chat_span_with_tool_call_id_synthesizes_before_tool_use():
+    """When the chat span carries `gen_ai.tool.call.id` plus parsed
+    arguments, the parser must emit before_tool_use too — not just
+    on_agent_decision.  Otherwise SAFER's Gateway never sees the call."""
+    provider, exporter = _fresh_exporter()
+    tracer = provider.get_tracer("before-tool-synth")
+    with tracer.start_as_current_span("chat claude-opus-4-7") as span:
+        span.set_attribute("gen_ai.operation.name", "chat")
+        span.set_attribute("gen_ai.request.model", "claude-opus-4-7")
+        span.set_attribute("gen_ai.tool.call.id", "tu_123")
+        span.set_attribute("gen_ai.tool.call.name", "read_file")
+        span.set_attribute("gen_ai.tool.call.arguments", '{"path": "x.md"}')
+        span.set_attribute("gen_ai.usage.input_tokens", 50)
+        span.set_attribute("gen_ai.usage.output_tokens", 12)
+
+    spans = parse_otlp_request(_serialize(exporter), "application/x-protobuf")
+    events = map_genai_span_to_safer(spans[0])
+    hook_names = [e.hook.value for e in events]
+    assert "before_tool_use" in hook_names
+    before = next(e for e in events if e.hook.value == "before_tool_use")
+    assert before.tool_name == "read_file"
+    assert before.args == {"path": "x.md"}
+
+
+def test_followup_chat_span_with_tool_message_event_pairs_after_tool_use():
+    """The OpenLLMetry Anthropic instrumentor may emit `gen_ai.tool.message`
+    events on the *next* chat span (when the user feeds the tool result
+    back).  The parser must pair them by tool_call_id and emit
+    after_tool_use — even though no execute_tool span exists."""
+    provider, exporter = _fresh_exporter()
+    tracer = provider.get_tracer("after-tool-pair")
+
+    # In real usage, multiple `messages.create` calls within a tool-use
+    # loop share a trace_id only if the user wraps the loop in a parent
+    # span (a `safer_session()` context manager or an OTel
+    # `start_as_current_span` they own).  Without that, each call is its
+    # own trace and the synth can't pair them.  Simulate the "with
+    # parent span" pattern here.
+    with tracer.start_as_current_span("agent_turn") as parent:
+        parent.set_attribute("safer.agent_id", "pair_test")
+        # Span 1 (the call): model decides to call a tool
+        with tracer.start_as_current_span("chat claude-opus-4-7") as span1:
+            span1.set_attribute("gen_ai.operation.name", "chat")
+            span1.set_attribute("gen_ai.request.model", "claude-opus-4-7")
+            span1.set_attribute("gen_ai.tool.call.id", "tu_pair")
+            span1.set_attribute("gen_ai.tool.call.name", "read_file")
+            span1.set_attribute("gen_ai.usage.input_tokens", 50)
+            span1.set_attribute("gen_ai.usage.output_tokens", 5)
+
+        # Span 2 (the follow-up call): user feeds tool_result back as a
+        # `gen_ai.tool.message` event on the next chat span.
+        with tracer.start_as_current_span("chat claude-opus-4-7") as span2:
+            span2.set_attribute("gen_ai.operation.name", "chat")
+            span2.set_attribute("gen_ai.request.model", "claude-opus-4-7")
+            span2.set_attribute("gen_ai.usage.input_tokens", 80)
+            span2.set_attribute("gen_ai.usage.output_tokens", 10)
+            span2.add_event(
+                "gen_ai.tool.message",
+                {"id": "tu_pair", "content": "file contents: hello world"},
+            )
+
+    spans = parse_otlp_request(_serialize(exporter), "application/x-protobuf")
+    # Process spans in chronological order
+    spans.sort(key=lambda s: s.start_ns)
+    all_events = []
+    for s in spans:
+        all_events.extend(map_genai_span_to_safer(s))
+
+    hook_names = [e.hook.value for e in all_events]
+    assert "before_tool_use" in hook_names
+    assert "after_tool_use" in hook_names
+    after = next(e for e in all_events if e.hook.value == "after_tool_use")
+    assert after.tool_name == "read_file"
+    assert "hello world" in after.result
+
+
+def test_unmatched_tool_message_event_does_NOT_synthesize():
+    """If a `gen_ai.tool.message` event arrives without a matching pending
+    call (e.g., we missed the originating span), do NOT emit a phantom
+    after_tool_use."""
+    provider, exporter = _fresh_exporter()
+    tracer = provider.get_tracer("unmatched")
+    with tracer.start_as_current_span("chat claude-opus-4-7") as span:
+        span.set_attribute("gen_ai.operation.name", "chat")
+        span.set_attribute("gen_ai.request.model", "claude-opus-4-7")
+        span.set_attribute("gen_ai.usage.input_tokens", 10)
+        span.set_attribute("gen_ai.usage.output_tokens", 1)
+        span.add_event(
+            "gen_ai.tool.message",
+            {"id": "tu_unknown", "content": "result without prior call"},
+        )
+
+    spans = parse_otlp_request(_serialize(exporter), "application/x-protobuf")
+    events = map_genai_span_to_safer(spans[0])
+    hook_names = [e.hook.value for e in events]
+    assert "after_tool_use" not in hook_names
+
+
 def test_cache_read_token_alias_picks_up_newer_attribute_keys():
     """Newer GenAI semconv versions may use `gen_ai.usage.cache_read_tokens`
     or `gen_ai.prompt_cache.cached_input_tokens`.  We accept all aliases."""
