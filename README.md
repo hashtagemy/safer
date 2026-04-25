@@ -6,7 +6,7 @@
 
 [![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/downloads/)
-[![Tests](https://img.shields.io/badge/tests-357%20passing-brightgreen.svg)](#testing)
+[![Tests](https://img.shields.io/badge/tests-403%20passing-brightgreen.svg)](#testing)
 [![Claude Hackathon 2026](https://img.shields.io/badge/Claude%20Hackathon-2026-purple.svg)](https://www.cerebralvalley.ai/)
 
 AI agents are shipping faster than anyone can audit them. SAFER gives
@@ -79,7 +79,7 @@ SAFER is opinionated about the shape of that missing layer:
 | **Assure** | Risk score + OWASP-aligned findings | **Red-Team Squad** — 3-stage adversarial evaluation (Strategist → Attacker → Analyst) mapped to OWASP LLM Top 10 | Block Moment toast with explainability drawer | **Session Report** — 7-category health card + **Compliance Pack** (GDPR / SOC 2 / OWASP LLM) in PDF / HTML / JSON |
 
 Everything above is wired end-to-end in the current release and
-verified by the 357-test suite.
+verified by the 403-test suite.
 
 ---
 
@@ -435,8 +435,8 @@ the two-line integration shown.
 | OpenAI (raw SDK) — `wrap_openai` | `chat.completions` + `responses` instrumented | **10/10** auto incl. async, streaming (chat + responses), `with_raw_response`, tool_call detection, `tool_result` pairing | `wrap_openai(OpenAI(), agent_id=...)` |
 | OpenAI Agents SDK | `RunHooks` + `TracingProcessor` | **10/10** auto via the SDK's first-class hook surface — handoffs, multi-agent runs included | `Runner.run(agent, input, hooks=install_safer_for_agents(agent_id=...))` |
 | Anthropic / OpenAI — OTel bridge (opt-in) | OpenLLMetry instrumentor → `/v1/traces` | **6-7/10**: session, before/after_llm, on_error, final_output, session_end auto; `on_agent_decision` synthesized when chat span carries `gen_ai.tool.call.id`; `before/after_tool_use` only when the user's tool code emits its own `execute_tool` spans (raw SDK calls don't) | `configure_otel_bridge(agent_id=..., instrument=["anthropic"])` |
-| AWS Bedrock Agents | — | not yet implemented | use `safer.track_event(...)` until a native adapter ships |
-| CrewAI | — | not yet implemented | same |
+| AWS Bedrock (`bedrock-runtime`) | `boto3.client` proxy on `converse` + `converse_stream` | **10/10** auto incl. `toolUse` auto-detect, `toolResult` pairing on next request, streaming accumulator, atexit session close | `client = wrap_bedrock(boto3.client("bedrock-runtime"), agent_id=...)` |
+| CrewAI | Global event bus listener (`BaseEventListener`) | **10/10** auto via `CrewKickoff*` / `LLMCall*` / `ToolUsage*` events; `pin_session=True` keeps a multi-kickoff REPL on one session | `SaferCrewListener(agent_id=..., agent_name=...)` (assign once, listener auto-registers) |
 | LlamaIndex / AutoGen / anything | Custom SDK | manual | `safer.track_event(Hook.*, payload)` |
 
 > **Tip.** For raw OpenAI / Anthropic code, prefer the native subclass
@@ -453,7 +453,7 @@ the two-line integration shown.
    framework's native callback surface, translate events to the 9
    hooks. The [LangChain
    adapter](packages/sdk/src/safer/adapters/langchain.py) is the
-   reference implementation (≈ 350 lines).
+   reference implementation (≈ 960 lines).
 
 ---
 
@@ -490,6 +490,8 @@ payloads. Pydantic models live in
 | OpenAI `wrap_openai` (responses) | ✅ | ✅ + `output_text` extraction | ✅ from `function_call` items | ✅ | ✅ | ✅ |
 | OpenAI `wrap_openai` (`with_raw_response`) | ✅ | ✅ unwraps `LegacyAPIResponse.parse()` | ✅ | ✅ | ✅ | ✅ |
 | OpenAI Agents SDK `SaferRunHooks` | ✅ rotates per `Runner.run` | ✅ from `ModelResponse.usage` | ✅ from `ToolContext` | ✅ (synth on tool_start + handoff) | ✅ from `on_agent_end` | ✅ via `SaferTracingProcessor` |
+| Bedrock `wrap_bedrock` (converse) | ✅ via first call + `atexit` close | ✅ + streaming accumulator | ✅ `toolUse` auto-detect + `toolResult` pairing | ✅ from response content | ✅ on `end_turn` / `stop_sequence` / `max_tokens` stopReason | ✅ |
+| CrewAI `SaferCrewListener` | ✅ on `CrewKickoffStartedEvent` / `CrewKickoffCompletedEvent` | ✅ from `LLMCall*Event` | ✅ from `ToolUsage*Event` | ✅ (synth on `ToolUsageStartedEvent`) | ✅ from `CrewKickoffCompletedEvent.output` | ✅ from `*FailedEvent` / `*ErrorEvent` |
 | OTel bridge (Anthropic / OpenAI) | ✅ per trace_id | ✅ | ⚠️ only when `execute_tool` spans exist | ⚠️ synth from `gen_ai.tool.call.id` when present | ✅ from root span end | ✅ |
 
 ---
@@ -594,7 +596,7 @@ canonical template.
 | `SAFER_JUDGE_ENABLED` | `auto` | `auto` (on iff `ANTHROPIC_API_KEY` set) · `on` · `off`. |
 | `SAFER_JUDGE_MODEL` | `claude-opus-4-7` | Override with another supported Claude model. |
 | `SAFER_JUDGE_MAX_TOKENS` | `2000` | Max output tokens for the Judge. |
-| `RED_TEAM_MODE` | `subagent` | `managed` (Claude Managed Agents) or `subagent` (plain Opus). Managed → subagent fallback is automatic. |
+| `RED_TEAM_MODE` | `subagent` | `managed` (Claude Managed Agents — Strategist, Attacker, Analyst each run as a separate Managed Agent) or `subagent` (plain Opus / Sonnet calls). Managed → subagent fallback is automatic on bootstrap or stage failure. |
 | `VITE_BACKEND_URL` | `http://localhost:8000` | Dashboard → backend REST base. |
 | `VITE_WS_URL` | `ws://localhost:8000` | Dashboard → backend WebSocket base. |
 
@@ -642,7 +644,7 @@ uv run ruff format .
 ## Testing
 
 ```bash
-uv run pytest              # 357 tests, 2 skipped
+uv run pytest              # 403 tests, 2 skipped
 ```
 
 Test coverage:
@@ -694,8 +696,8 @@ safer/
 │  │        ├─ otel.py          # ✅ OTel bridge (Anthropic + OpenAI, 10/10)
 │  │        ├─ claude_sdk.py    # 🔶 Client proxy (3/10 + manual helpers)
 │  │        ├─ openai_agents.py # 🔶 Client proxy (4/10 + manual helpers)
-│  │        ├─ bedrock.py       # 🔶 Stub (planned)
-│  │        └─ crewai.py        # 🔶 Stub (planned)
+│  │        ├─ bedrock.py       # ✅ Bundled (`boto3.converse` proxy, 10/10)
+│  │        └─ crewai.py        # ✅ Bundled (`SaferCrewListener` event bus, 10/10)
 │  ├─ backend/                  # FastAPI + asyncio + SQLite WAL
 │  │  └─ src/safer_backend/
 │  │     ├─ main.py             # app + routers
@@ -769,19 +771,24 @@ safer/
 **v0.1** (this release — Claude Hackathon 2026 submission):
 
 - All four pillars × four lifecycle phases live.
-- Bundled adapters for Claude SDK and LangChain.
-- Partial OpenAI Agents adapter; beta stubs for Google ADK, Bedrock,
-  CrewAI.
+- Bundled adapters: Claude SDK (raw + subclass), OpenAI raw,
+  OpenAI Agents SDK, LangChain (sync + async), Google ADK, Strands,
+  AWS Bedrock (`bedrock-runtime` converse proxy), CrewAI
+  (`SaferCrewListener` event bus). All ten emit the full 9-hook
+  contract with `pin_session` for chat REPLs and tool_use auto-
+  detection where the framework supports it.
+- Optional OTel bridge for Anthropic / OpenAI raw users who already run
+  an OpenLLMetry pipeline.
 - Policy Studio, Inspector, Red-Team, Session Report, Compliance Pack.
 - Self-hosted dashboard with 10 fully-featured pages.
 
 **v0.2 (planned):**
 
-- Full Google ADK, Bedrock, and CrewAI adapters.
-- Managed Agents backend for Red-Team once the API is widely available.
 - Grafana / OTel exporter for org-wide rollups.
 - Policy Studio "diff preview" — see which past events the new policy
   would have changed.
+- Multi-agent CrewAI graph events (`AgentExecution*`) wired through
+  for richer per-agent traces.
 
 ---
 

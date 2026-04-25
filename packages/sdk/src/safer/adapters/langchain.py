@@ -333,6 +333,40 @@ def _extract_tool_output(output: Any) -> str:
     return _safe_str(output)
 
 
+def _extract_tool_calls(response: Any) -> list[dict[str, Any]]:
+    """Pull `tool_calls` from a LangChain `LLMResult`'s top AIMessage.
+
+    Modern `create_agent` (LangGraph) emits tool_calls as an attribute
+    of the AIMessage instead of firing `on_agent_action`, so the
+    LangChain SAFER handler synthesizes `on_agent_decision` events from
+    this list. Each entry is a dict like
+    `{"id": "tc_...", "name": "...", "args": {...}}`.
+    """
+    try:
+        generations = getattr(response, "generations", []) or []
+        if not generations or not generations[0]:
+            return []
+        msg = getattr(generations[0][0], "message", None)
+        if msg is None:
+            return []
+        tcs = getattr(msg, "tool_calls", None) or []
+        result: list[dict[str, Any]] = []
+        for tc in tcs:
+            if isinstance(tc, dict):
+                result.append(tc)
+            else:
+                result.append(
+                    {
+                        "id": getattr(tc, "id", None),
+                        "name": getattr(tc, "name", None),
+                        "args": getattr(tc, "args", None) or {},
+                    }
+                )
+        return result
+    except Exception:
+        return []
+
+
 # ---------- handler factory -------------------------------------------------
 #
 # The real classes are built once on first instantiation and cached.  This
@@ -438,6 +472,7 @@ class _HandlerMixin:
         agent_name: str | None = None,
         session_id: str | None = None,
         client: SaferClient | None = None,
+        pin_session: bool = False,
     ) -> None:
         from ._bootstrap import ensure_runtime
 
@@ -449,9 +484,13 @@ class _HandlerMixin:
         self.agent_name = agent_name or agent_id
         # `_initial_session_id` pins the FIRST root-chain only.  Subsequent
         # invocations rotate through fresh ids — see `_begin_session`.
+        # `pin_session=True` flips that: every invocation reuses the same
+        # session_id and `on_session_end` is deferred to atexit so a chat
+        # REPL becomes one logical SAFER session.
         self._initial_session_id = session_id
         self._current_session_id: str | None = None
         self._client = client
+        self._pin_session = pin_session
         # Per-invocation state — reset by _begin_session.
         self._session_started = False
         self._sequence = 0
@@ -464,7 +503,11 @@ class _HandlerMixin:
         self._tool_start_ts: dict[str, float] = {}
         self._tool_name_by_rid: dict[str, str] = {}
         self._llm_model_by_rid: dict[str, str] = {}
+        self._seen_tool_call_ids: set[str] = set()
         self._profile_synced = False
+        self._atexit_registered = False
+        if pin_session:
+            self._register_atexit_close()
 
     # ---------- internal helpers ----------
 
@@ -477,7 +520,20 @@ class _HandlerMixin:
         return self._current_session_id
 
     def _begin_session(self) -> None:
-        """Start a fresh SAFER session for a new root-chain invocation."""
+        """Start a fresh SAFER session for a new root-chain invocation.
+
+        With `pin_session=True` we keep the session_id stable across
+        invocations and only zero the per-invocation working maps —
+        sequence + step count keep growing for accurate session-wide
+        accounting.
+        """
+        if self._pin_session:
+            self._llm_start_ts.clear()
+            self._tool_start_ts.clear()
+            self._tool_name_by_rid.clear()
+            self._llm_model_by_rid.clear()
+            self._seen_tool_call_ids.clear()
+            return
         self._current_session_id = f"sess_{uuid.uuid4().hex[:16]}"
         self._session_started = False
         self._sequence = 0
@@ -489,6 +545,31 @@ class _HandlerMixin:
         self._tool_start_ts.clear()
         self._tool_name_by_rid.clear()
         self._llm_model_by_rid.clear()
+        self._seen_tool_call_ids.clear()
+
+    def _register_atexit_close(self) -> None:
+        if self._atexit_registered:
+            return
+        import atexit
+
+        atexit.register(self._atexit_close_session)
+        self._atexit_registered = True
+
+    def _atexit_close_session(self) -> None:
+        """Idempotent atexit cleanup for pin_session mode."""
+        if not self._pin_session or not self._session_started:
+            return
+        try:
+            self._emit_session_end(success=True)
+        except Exception:  # pragma: no cover — atexit must never raise
+            pass
+
+    def close_session(self, *, success: bool = True) -> None:
+        """Manually close the pinned chat session. No-op when
+        pin_session is False (per-invocation lifecycle handles it)."""
+        if not self._pin_session or not self._session_started:
+            return
+        self._emit_session_end(success=success)
 
     def _get_client(self) -> SaferClient | None:
         return self._client or get_client()
@@ -557,6 +638,23 @@ class _HandlerMixin:
         # Mark closed so a subsequent root-chain rotates to a fresh session_id.
         self._session_started = False
         self._root_run_id = None
+
+    def _maybe_close_invocation(self, *, success: bool = True) -> None:
+        """Close out a root-chain invocation.
+
+        With `pin_session=False` (default) this emits `on_session_end`
+        and marks the session closed so the next root-chain gets a fresh
+        session_id.
+
+        With `pin_session=True` we only release the root_run_id binding
+        so the next root-chain can be tracked, but we keep the SAFER
+        session open — the atexit hook (or a manual `close_session()`)
+        emits the single closing `on_session_end`.
+        """
+        if self._pin_session:
+            self._root_run_id = None
+            return
+        self._emit_session_end(success=success)
         self._final_emitted = False
 
     def _maybe_sync_profile(self, system_text: str | None) -> None:
@@ -616,7 +714,7 @@ class _HandlerMixin:
                 )
             )
             self._final_emitted = True
-        self._emit_session_end(success=True)
+        self._maybe_close_invocation(success=True)
 
     def on_chain_error(
         self, error: BaseException, *, run_id: Any | None = None, **kwargs: Any
@@ -624,8 +722,8 @@ class _HandlerMixin:
         self._emit_error(error)
         rid = str(run_id) if run_id is not None else ""
         if self._root_run_id and rid == self._root_run_id:
-            # Root chain errored — close the session.
-            self._emit_session_end(success=False)
+            # Root chain errored — close the invocation.
+            self._maybe_close_invocation(success=False)
 
     # ---------- llm lifecycle ----------
 
@@ -724,6 +822,39 @@ class _HandlerMixin:
             )
         )
         self._step_count += 1
+        # Synthesize on_agent_decision from any tool_calls embedded in the
+        # AIMessage. Modern LangChain (`create_agent`, LangGraph) does not
+        # fire `on_agent_action` — tool calls land here as message
+        # metadata, so we have to surface them ourselves. The
+        # `_seen_tool_call_ids` set deduplicates against legacy
+        # `on_agent_action` emissions in old AgentExecutor pipelines.
+        for tc in _extract_tool_calls(response):
+            tc_id = str(tc.get("id") or "")
+            if tc_id and tc_id in self._seen_tool_call_ids:
+                continue
+            if tc_id:
+                self._seen_tool_call_ids.add(tc_id)
+            self._emit_decision_from_tool_call(tc)
+
+    def _emit_decision_from_tool_call(self, tc: dict[str, Any]) -> None:
+        name = str(tc.get("name") or "tool")
+        args = tc.get("args") or {}
+        try:
+            import json as _json
+
+            args_repr = _json.dumps(args)[:1000]
+        except Exception:
+            args_repr = _safe_str(args, 1000)
+        self._emit(
+            OnAgentDecisionPayload(
+                session_id=self.session_id,
+                agent_id=self.agent_id,
+                sequence=self._next_sequence(),
+                decision_type="tool_call",
+                chosen_action=f"{name}({args_repr})" if args_repr else name,
+                reasoning=None,
+            )
+        )
 
     def on_llm_error(
         self, error: BaseException, *, run_id: Any | None = None, **kwargs: Any
@@ -860,6 +991,14 @@ class _HandlerMixin:
     def on_agent_action(self, action: Any, **kwargs: Any) -> None:
         tool = getattr(action, "tool", None)
         tool_input = getattr(action, "tool_input", None)
+        # Dedup: modern `create_agent` synthesizes the same decision
+        # from `on_llm_end` via the AIMessage.tool_calls list. If a
+        # matching tool_call_id was already emitted there, skip.
+        tool_call_id = getattr(action, "tool_call_id", None) or ""
+        if tool_call_id and tool_call_id in self._seen_tool_call_ids:
+            return
+        if tool_call_id:
+            self._seen_tool_call_ids.add(tool_call_id)
         # Serialize tool_input to a short JSON-ish string for the decision payload
         if isinstance(tool_input, dict):
             try:

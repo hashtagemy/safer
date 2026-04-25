@@ -66,6 +66,11 @@ Thumbs.db
 docs/demo-assets/*.mp4
 !docs/demo-assets/.gitkeep
 
+# Local-only planning + audit notes (submission form drafts, fazlar, etc.)
+# These live next to the repo for the team's working notes; they're
+# never meant to ship.
+roadmap/
+
 # Misc
 .cache/
 tmp/

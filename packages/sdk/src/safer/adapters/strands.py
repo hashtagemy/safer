@@ -284,6 +284,7 @@ def _make_provider_cls() -> type:
             agent_name: str | None = None,
             session_id: str | None = None,
             client: SaferClient | None = None,
+            pin_session: bool = False,
         ) -> None:
             ensure_runtime(agent_id, agent_name)
             self.agent_id = agent_id
@@ -292,9 +293,15 @@ def _make_provider_cls() -> type:
             # subsequent `agent(prompt)` call (i.e. each Strands invocation)
             # gets a fresh SAFER session_id via `_begin_invocation` —
             # otherwise multiple turns would all write to the same session.
+            #
+            # `pin_session=True` flips that: every invocation reuses the
+            # same SAFER session_id and we defer `on_session_end` to
+            # process exit (atexit). Useful for chat REPLs where the
+            # whole conversation is one logical session.
             self._initial_session_id = session_id
             self._current_session_id: str | None = None
             self._client = client
+            self._pin_session = pin_session
             self._session_started = False
             self._sequence = 0
             self._step_count = 0
@@ -304,6 +311,9 @@ def _make_provider_cls() -> type:
             self._last_tokens: tuple[int, int, int] = (0, 0, 0)
             self._session_start_ts: float | None = None
             self._total_cost_usd: float = 0.0
+            self._atexit_registered = False
+            if pin_session:
+                self._register_atexit_close()
 
         @property
         def session_id(self) -> str:
@@ -315,7 +325,20 @@ def _make_provider_cls() -> type:
             return self._current_session_id
 
         def _begin_invocation(self) -> None:
-            """Start a fresh SAFER session for a new Strands invocation."""
+            """Start a fresh SAFER session for a new Strands invocation.
+
+            When `pin_session=True` this is a soft reset: the session_id
+            is preserved, `_session_started` stays True (so we don't fire
+            another on_session_start), and only the per-invocation
+            counters/timers are zeroed for accurate per-step accounting.
+            """
+            if self._pin_session:
+                # Keep session_id + session_started; reset per-invocation
+                # bookkeeping so each turn's deltas are independent.
+                self._sequence += 0  # session-wide sequence keeps growing
+                self._model_start_ts = None
+                self._tool_start_ts.clear()
+                return
             self._current_session_id = f"sess_{uuid.uuid4().hex[:16]}"
             self._session_started = False
             self._sequence = 0
@@ -325,6 +348,67 @@ def _make_provider_cls() -> type:
             self._last_tokens = (0, 0, 0)
             self._session_start_ts = time.monotonic()
             self._total_cost_usd = 0.0
+
+        def _register_atexit_close(self) -> None:
+            """Wire an atexit hook that emits on_session_end exactly once.
+
+            Only used in pin_session mode — without it, a chat REPL that
+            runs through `Ctrl+D` would never close its session in SAFER.
+            """
+            if self._atexit_registered:
+                return
+            import atexit
+
+            atexit.register(self._atexit_close_session)
+            self._atexit_registered = True
+
+        def _atexit_close_session(self) -> None:
+            """Idempotent atexit cleanup for pin_session mode."""
+            if not self._pin_session or not self._session_started:
+                return
+            try:
+                duration_ms = (
+                    int((time.monotonic() - self._session_start_ts) * 1000)
+                    if self._session_start_ts is not None
+                    else 0
+                )
+                self._emit(
+                    OnSessionEndPayload(
+                        session_id=self.session_id,
+                        agent_id=self.agent_id,
+                        sequence=self._next_sequence(),
+                        total_duration_ms=duration_ms,
+                        total_cost_usd=self._total_cost_usd,
+                        success=True,
+                    )
+                )
+                self._session_started = False
+            except Exception:  # pragma: no cover — atexit must never raise
+                pass
+
+        def close_session(self, *, success: bool = True) -> None:
+            """Manually emit on_session_end for the pinned chat session.
+
+            No-op when `pin_session=False` (the per-invocation lifecycle
+            already closed the session)."""
+            if not self._pin_session or not self._session_started:
+                return
+            duration_ms = (
+                int((time.monotonic() - self._session_start_ts) * 1000)
+                if self._session_start_ts is not None
+                else 0
+            )
+            self._emit(
+                OnSessionEndPayload(
+                    session_id=self.session_id,
+                    agent_id=self.agent_id,
+                    sequence=self._next_sequence(),
+                    total_duration_ms=duration_ms,
+                    total_cost_usd=self._total_cost_usd,
+                    success=success,
+                )
+            )
+            self._session_started = False
 
         # internal plumbing ----------------------------------------
 
@@ -431,6 +515,10 @@ def _make_provider_cls() -> type:
                         total_steps=self._step_count,
                     )
                 )
+                # pin_session=True keeps the session open across
+                # invocations — the atexit hook will close it once.
+                if self._pin_session:
+                    return
                 duration_ms = (
                     int((time.monotonic() - self._session_start_ts) * 1000)
                     if self._session_start_ts is not None
