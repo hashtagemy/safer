@@ -245,6 +245,25 @@ Whichever framework you're on, there's exactly one adapter line to
 add. Copy-paste from the table below into your own code; no other
 glue is required.
 
+### Which adapter do I pick?
+
+| If your code looks like… | Use |
+|---|---|
+| `from google.adk.agents import LlmAgent` + `Runner(plugins=[...])` | **Google ADK** plugin |
+| `from strands import Agent` + `agent(prompt)` | **AWS Strands** hook provider |
+| `from langchain ...` + `AgentExecutor` / LCEL pipeline / LangGraph | **LangChain** callback handler |
+| `from anthropic import Anthropic` + `client.messages.create(...)` (you write the tool-use loop yourself) | **Anthropic** native — `SaferAnthropic` for new code, `wrap_anthropic(Anthropic())` to instrument an existing client |
+| `from openai import OpenAI` + `client.chat.completions.create(...)` (you write the loop yourself) | **OpenAI raw** — `wrap_openai(OpenAI())` |
+| `from agents import Agent, Runner` + `Runner.run(agent, ...)` (the OpenAI Agents SDK framework) | **OpenAI Agents SDK** — `install_safer_for_agents(...)` |
+| You already run an OpenTelemetry pipeline (Datadog, Jaeger, etc.) and prefer to bridge from there | **OTel bridge** — opt-in alternative, lower hook coverage than the native paths |
+
+> The OpenAI side has two adapters because OpenAI ships two distinct
+> products: `openai` (raw API client — you write the agent loop) and
+> `openai-agents` (multi-agent framework with `Agent`/`Runner`/handoffs
+> built in).  Different code shape → different adapter.  Same applies
+> to Anthropic's two paths — they're stylistic alternatives that share
+> the same hook coverage; pick whichever fits your codebase better.
+
 #### Google ADK — Runner plugin
 
 ```python
