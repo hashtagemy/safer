@@ -27,35 +27,15 @@ from __future__ import annotations
 
 import pytest
 
-import safer
-from safer.client import clear_client
-
 
 pytest.importorskip("langchain_core")
 pytest.importorskip("langchain")
 
 
-@pytest.fixture(autouse=True)
-def _reset_safer_runtime():
-    clear_client()
-    yield
-    clear_client()
-
-
-def _capture_events(client) -> list[dict]:
-    captured: list[dict] = []
-
-    def _patched(event):
-        captured.append(event)
-
-    client.transport.emit = _patched
-    return captured
-
-
 # ---------- the user's agent: idiomatic LangChain create_agent ----------
 
 
-def test_langchain_create_agent_emits_full_safer_lifecycle():
+def test_langchain_create_agent_emits_full_safer_lifecycle(captured_events):
     from langchain.agents import create_agent
     from langchain_core.language_models import BaseChatModel
     from langchain_core.messages import AIMessage
@@ -136,10 +116,7 @@ def test_langchain_create_agent_emits_full_safer_lifecycle():
         system_prompt="You are a code analyst.  Use the tools to answer.",
     )
 
-    safer_client = safer.instrument(api_url="http://127.0.0.1:59999")
-    events = _capture_events(safer_client)
-
-    # --- README-pattern integration -----------------------------------
+    # ====== USER CODE (verbatim from README integration) =============
     from safer.adapters.langchain import SaferCallbackHandler
 
     handler = SaferCallbackHandler(
@@ -149,15 +126,17 @@ def test_langchain_create_agent_emits_full_safer_lifecycle():
         {"messages": [{"role": "user", "content": "What is SAFER?"}]},
         config={"callbacks": [handler]},
     )
-    # ------------------------------------------------------------------
+    # ==================================================================
 
     final_msg = result["messages"][-1]
     assert "SAFER" in final_msg.content
 
+    events = captured_events
     hooks = [e["hook"] for e in events]
 
-    # 1. Session boundary
-    assert hooks[0] == "on_session_start"
+    # Onboarding event from `ensure_runtime` + the runtime session
+    assert hooks[0] == "on_agent_register"
+    assert "on_session_start" in hooks
     assert hooks[-1] == "on_session_end"
     assert hooks.count("on_session_start") == 1
     assert hooks.count("on_session_end") == 1

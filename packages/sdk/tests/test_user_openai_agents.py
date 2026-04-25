@@ -26,38 +26,19 @@ from types import SimpleNamespace
 import httpx
 import pytest
 
-import safer
-from safer.client import clear_client
-
 
 pytest.importorskip("agents")
 
 
 @pytest.fixture(autouse=True)
-def _reset_safer_runtime():
-    clear_client()
-    yield
-    clear_client()
-
-
-@pytest.fixture(autouse=True)
-def _reset_safer_agents_processor_cache():
-    """Clean the install_safer_for_agents idempotence cache between tests."""
+def _reset_agents_processor_cache():
+    """Drop the install_safer_for_agents idempotence cache between tests
+    so each test gets a fresh global TracingProcessor registration."""
     from safer.adapters import openai_agents as oa_mod
 
     oa_mod._reset_for_tests()
     yield
     oa_mod._reset_for_tests()
-
-
-def _capture_events(client) -> list[dict]:
-    captured: list[dict] = []
-
-    def _patched(event):
-        captured.append(event)
-
-    client.transport.emit = _patched
-    return captured
 
 
 # ---------- httpx mock for OpenAI chat.completions ------------------------
@@ -123,11 +104,10 @@ def _make_handler():
 # ---------- the test ------------------------------------------------------
 
 
-def test_openai_agents_sdk_runner_emits_full_safer_lifecycle():
+def test_openai_agents_sdk_runner_emits_full_safer_lifecycle(captured_events):
     """A real `Runner.run(agent, ..., hooks=hooks)` exercises the full
     Agents SDK loop: agent_start → llm_start → llm_end → tool_start →
-    tool_end → llm_start → llm_end → agent_end.  SAFER must capture
-    every hook from the SDK's own RunHooks dispatch."""
+    tool_end → llm_start → llm_end → agent_end."""
     import asyncio
 
     from agents import (
@@ -140,17 +120,10 @@ def test_openai_agents_sdk_runner_emits_full_safer_lifecycle():
     )
     from openai import AsyncOpenAI
 
-    # Disable Agents SDK's own tracing exporter so we don't try to call
-    # api.openai.com/traces at the end of the run.
+    # Test setup: disable the Agents SDK's own tracing exporter and
+    # inject a mocked OpenAI client.  This is test plumbing — a real
+    # user wouldn't need it (their OPENAI_API_KEY would be set).
     set_tracing_disabled(True)
-
-    safer_client = safer.instrument(api_url="http://127.0.0.1:59999")
-    events = _capture_events(safer_client)
-
-    # Inject a mocked AsyncOpenAI globally so the Agents SDK's internal
-    # client uses our MockTransport.  The SDK defaults to the Responses
-    # API; switch to chat.completions because that's the wire shape our
-    # mock returns.
     transport = httpx.MockTransport(_make_handler())
     mock_client = AsyncOpenAI(
         api_key="sk-test", http_client=httpx.AsyncClient(transport=transport)
@@ -189,13 +162,12 @@ def test_openai_agents_sdk_runner_emits_full_safer_lifecycle():
         model="gpt-4o",
     )
 
-    # --- README-pattern integration ------------------------------------
+    # ====== USER CODE (verbatim from README integration) ==============
     from safer.adapters.openai_agents import install_safer_for_agents
 
     hooks = install_safer_for_agents(
         agent_id="billing_demo", agent_name="Billing Demo"
     )
-    # -------------------------------------------------------------------
 
     async def go():
         return await Runner.run(
@@ -203,12 +175,18 @@ def test_openai_agents_sdk_runner_emits_full_safer_lifecycle():
         )
 
     result = asyncio.run(go())
+    # ===================================================================
+
     assert "paid" in result.final_output.lower()
 
+    events = captured_events
     hook_names = [e["hook"] for e in events]
 
-    # SAFER captured the full lifecycle
-    assert hook_names[0] == "on_session_start"
+    # SAFER captured the full lifecycle.  The very first event is the
+    # one-shot `on_agent_register` from `ensure_runtime`; the runtime
+    # session_start follows.
+    assert hook_names[0] == "on_agent_register"
+    assert "on_session_start" in hook_names
     assert hook_names[-1] == "on_session_end"
     assert "before_llm_call" in hook_names
     assert "after_llm_call" in hook_names

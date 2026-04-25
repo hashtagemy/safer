@@ -24,31 +24,11 @@ import asyncio
 
 import pytest
 
-import safer
-from safer.client import clear_client
-
 
 pytest.importorskip("google.adk.plugins.base_plugin")
 
 
-@pytest.fixture(autouse=True)
-def _reset_safer_runtime():
-    clear_client()
-    yield
-    clear_client()
-
-
-def _capture_events(client) -> list[dict]:
-    captured: list[dict] = []
-
-    def _patched(event):
-        captured.append(event)
-
-    client.transport.emit = _patched
-    return captured
-
-
-def test_google_adk_runner_emits_full_safer_lifecycle():
+def test_google_adk_runner_emits_full_safer_lifecycle(captured_events):
     from google.adk.agents import LlmAgent
     from google.adk.models import BaseLlm, LlmResponse
     from google.adk.runners import InMemoryRunner
@@ -133,10 +113,7 @@ def test_google_adk_runner_emits_full_safer_lifecycle():
         tools=[read_file, lookup_secret],
     )
 
-    safer_client = safer.instrument(api_url="http://127.0.0.1:59999")
-    events = _capture_events(safer_client)
-
-    # --- README-pattern integration --------------------------------------
+    # ====== USER CODE (verbatim from README integration) ===============
     from safer.adapters.google_adk import SaferAdkPlugin
 
     runner = InMemoryRunner(
@@ -144,7 +121,6 @@ def test_google_adk_runner_emits_full_safer_lifecycle():
         app_name="repo_analyst_app",
         plugins=[SaferAdkPlugin(agent_id="repo_analyst", agent_name="Repo Analyst")],
     )
-    # ---------------------------------------------------------------------
 
     async def go():
         session = await runner.session_service.create_session(
@@ -160,11 +136,14 @@ def test_google_adk_runner_emits_full_safer_lifecycle():
             pass
 
     asyncio.run(go())
+    # ====================================================================
 
+    events = captured_events
     hook_names = [e["hook"] for e in events]
 
-    # 1. Session boundary (matches ADK invocation lifecycle)
-    assert hook_names[0] == "on_session_start"
+    # 1. Onboarding event from `ensure_runtime` + the runtime session
+    assert hook_names[0] == "on_agent_register"
+    assert "on_session_start" in hook_names
     assert hook_names[-1] == "on_session_end"
 
     # 2. Two LLM turns (call + final)

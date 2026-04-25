@@ -27,31 +27,11 @@ import json
 
 import pytest
 
-import safer
-from safer.client import clear_client
-
 
 pytest.importorskip("strands.hooks")
 
 
-@pytest.fixture(autouse=True)
-def _reset_safer_runtime():
-    clear_client()
-    yield
-    clear_client()
-
-
-def _capture_events(client) -> list[dict]:
-    captured: list[dict] = []
-
-    def _patched(event):
-        captured.append(event)
-
-    client.transport.emit = _patched
-    return captured
-
-
-def test_strands_agent_emits_full_safer_lifecycle():
+def test_strands_agent_emits_full_safer_lifecycle(captured_events):
     from strands import Agent, tool
     from strands.models import Model
 
@@ -146,10 +126,7 @@ def test_strands_agent_emits_full_safer_lifecycle():
         },
     ]
 
-    safer_client = safer.instrument(api_url="http://127.0.0.1:59999")
-    events = _capture_events(safer_client)
-
-    # --- README-pattern integration -------------------------------------
+    # ====== USER CODE (verbatim from README integration) ===============
     from safer.adapters.strands import SaferHookProvider
 
     agent = Agent(
@@ -163,9 +140,10 @@ def test_strands_agent_emits_full_safer_lifecycle():
             )
         ],
     )
-    # ---------------------------------------------------------------------
 
     result = agent("What's my disk usage like?")
+    # ====================================================================
+
     final_text = ""
     for block in result.message.get("content", []):
         if isinstance(block, dict) and block.get("text"):
@@ -173,10 +151,12 @@ def test_strands_agent_emits_full_safer_lifecycle():
             break
     assert "42%" in final_text or "headroom" in final_text.lower()
 
+    events = captured_events
     hook_names = [e["hook"] for e in events]
 
-    # 1. Session boundary
-    assert hook_names[0] == "on_session_start"
+    # 1. Onboarding event from `ensure_runtime` + the runtime session
+    assert hook_names[0] == "on_agent_register"
+    assert "on_session_start" in hook_names
     assert hook_names[-1] == "on_session_end"
 
     # 2. Two LLM call pairs (one per scripted turn)

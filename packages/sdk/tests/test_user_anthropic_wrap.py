@@ -26,29 +26,6 @@ from __future__ import annotations
 import json
 
 import httpx
-import pytest
-
-import safer
-from safer.adapters.claude_sdk import wrap_anthropic
-from safer.client import clear_client
-
-
-@pytest.fixture(autouse=True)
-def _reset_safer_runtime():
-    clear_client()
-    yield
-    clear_client()
-
-
-def _capture_events(client) -> list[dict]:
-    captured: list[dict] = []
-    original = client.transport.emit
-
-    def _patched(event):
-        captured.append(event)
-
-    client.transport.emit = _patched
-    return captured
 
 
 # ---------- the user's agent: idiomatic Anthropic tool-use loop -----------
@@ -226,16 +203,17 @@ def _make_anthropic_mock_handler():
 # ---------- the test ------------------------------------------------------
 
 
-def test_anthropic_wrap_anthropic_captures_full_tool_use_loop():
+def test_anthropic_wrap_anthropic_captures_full_tool_use_loop(captured_events):
     """End-to-end: a customer-support agent runs through a multi-step
     tool-use loop on a real `anthropic.Anthropic` client whose HTTP
-    transport is mocked.  The only SAFER lines are the two from the
-    README; we then assert SAFER captured every lifecycle hook."""
-    safer_client = safer.instrument(api_url="http://127.0.0.1:59999")
-    events = _capture_events(safer_client)
-
-    # --- README-pattern integration (2 lines) ----------------------------
+    transport is mocked.  The body of this test below is exactly what a
+    user would copy-paste from the README — adapter import, adapter
+    line, the framework's own agent code.  The `captured_events`
+    fixture records what SAFER emits; the test never touches SAFER
+    internals."""
+    # ====== USER CODE (verbatim from README's two-line integration) ======
     from anthropic import Anthropic
+    from safer.adapters.claude_sdk import wrap_anthropic
 
     transport = httpx.MockTransport(_make_anthropic_mock_handler())
     client = wrap_anthropic(
@@ -243,18 +221,23 @@ def test_anthropic_wrap_anthropic_captures_full_tool_use_loop():
         agent_id="customer_support",
         agent_name="Customer Support",
     )
-    # ---------------------------------------------------------------------
 
     final_text = run_customer_support_turn(
         client, "Hi, can you check on customer C-1024 and confirm everything's fine?"
     )
+    # =====================================================================
+
     assert "Alex" in final_text or "alex" in final_text.lower()
 
-    # Two messages.create calls happened in the loop.
+    # Now verify what SAFER captured (test-only, not user code).
+    events = captured_events
     hook_names = [e["hook"] for e in events]
 
-    # 1. Session boundary
-    assert hook_names[0] == "on_session_start"
+    # 1. The very first event is the onboarding `on_agent_register` —
+    #    SAFER's `ensure_runtime` fires this once when the SDK boots.
+    assert hook_names[0] == "on_agent_register"
+    # ...followed immediately by the runtime session_start.
+    assert "on_session_start" in hook_names
 
     # 2. Each create call gives us a before/after_llm pair
     assert hook_names.count("before_llm_call") == 2
@@ -291,16 +274,14 @@ def test_anthropic_wrap_anthropic_captures_full_tool_use_loop():
         assert abs(a["cost_usd"] - expected_cost) < 1e-9
 
 
-def test_anthropic_wrap_anthropic_async_client_emits_events():
+def test_anthropic_wrap_anthropic_async_client_emits_events(captured_events):
     """Same demo via `AsyncAnthropic` — proves the README two-line pattern
-    works for async code too (`AsyncAnthropic` returns coroutines from
-    `messages.create` which earlier versions silently dropped)."""
+    works for async code too."""
     import asyncio
 
+    # ====== USER CODE (verbatim from README two-line integration) =======
     from anthropic import AsyncAnthropic
-
-    safer_client = safer.instrument(api_url="http://127.0.0.1:59999")
-    events = _capture_events(safer_client)
+    from safer.adapters.claude_sdk import wrap_anthropic
 
     transport = httpx.MockTransport(_make_anthropic_mock_handler())
     client = wrap_anthropic(
@@ -344,8 +325,11 @@ def test_anthropic_wrap_anthropic_async_client_emits_events():
             messages.append({"role": "user", "content": tool_results})
 
     final = asyncio.run(run_async_turn())
+    # =====================================================================
+
     assert "alex" in final.lower()
 
+    events = captured_events
     hook_names = [e["hook"] for e in events]
     # Same lifecycle as the sync test
     assert "on_session_start" in hook_names

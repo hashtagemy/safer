@@ -27,28 +27,6 @@ from __future__ import annotations
 import json
 
 import httpx
-import pytest
-
-import safer
-from safer.adapters.openai_client import wrap_openai
-from safer.client import clear_client
-
-
-@pytest.fixture(autouse=True)
-def _reset_safer_runtime():
-    clear_client()
-    yield
-    clear_client()
-
-
-def _capture_events(client) -> list[dict]:
-    captured: list[dict] = []
-
-    def _patched(event):
-        captured.append(event)
-
-    client.transport.emit = _patched
-    return captured
 
 
 # ---------- the user's agent: idiomatic OpenAI tool-use loop -------------
@@ -210,16 +188,14 @@ def _make_openai_mock_handler():
 # ---------- the test ------------------------------------------------------
 
 
-def test_openai_wrap_openai_captures_full_tool_use_loop():
+def test_openai_wrap_openai_captures_full_tool_use_loop(captured_events):
     """End-to-end: a data-analyst agent runs through the canonical tool-use
     loop on a real `openai.OpenAI` client whose HTTP transport is
-    mocked.  The only SAFER lines are the two from the README; we then
-    assert SAFER captured every lifecycle hook."""
-    safer_client = safer.instrument(api_url="http://127.0.0.1:59999")
-    events = _capture_events(safer_client)
-
-    # --- README-pattern integration (2 lines) -----------------------------
+    mocked.  Test body is verbatim README integration; the
+    `captured_events` fixture records whatever SAFER emits."""
+    # ====== USER CODE (verbatim from README two-line integration) ======
     from openai import OpenAI
+    from safer.adapters.openai_client import wrap_openai
 
     transport = httpx.MockTransport(_make_openai_mock_handler())
     client = wrap_openai(
@@ -227,17 +203,20 @@ def test_openai_wrap_openai_captures_full_tool_use_loop():
         agent_id="data_analyst",
         agent_name="Data Analyst",
     )
-    # ----------------------------------------------------------------------
 
     final = run_data_analyst_turn(
         client, "What's the lifetime value of customer C-1024?"
     )
+    # ====================================================================
+
     assert "12,400" in final or "12400" in final
 
+    events = captured_events
     hooks = [e["hook"] for e in events]
 
-    # 1. Session boundary
-    assert hooks[0] == "on_session_start"
+    # 1. Onboarding event from `ensure_runtime` + the runtime session
+    assert hooks[0] == "on_agent_register"
+    assert "on_session_start" in hooks
     # 2. Two LLM call pairs (one for the tool decision, one for the final text)
     assert hooks.count("before_llm_call") == 2
     assert hooks.count("after_llm_call") == 2
@@ -269,16 +248,13 @@ def test_openai_wrap_openai_captures_full_tool_use_loop():
     assert any("chatcmpl_" in a["source"] for a in afters)
 
 
-def test_openai_wrap_openai_async_client_emits_events():
-    """Same flow on `AsyncOpenAI` — verifies the async detection in
-    `wrap_openai` (Faz 35.7) actually awaits the coroutine instead of
-    silently dropping it like the pre-Faz-35 sync wrapper did."""
+def test_openai_wrap_openai_async_client_emits_events(captured_events):
+    """Same flow on `AsyncOpenAI`."""
     import asyncio
 
+    # ====== USER CODE (verbatim from README two-line integration) ======
     from openai import AsyncOpenAI
-
-    safer_client = safer.instrument(api_url="http://127.0.0.1:59999")
-    events = _capture_events(safer_client)
+    from safer.adapters.openai_client import wrap_openai
 
     transport = httpx.MockTransport(_make_openai_mock_handler())
     client = wrap_openai(
@@ -311,8 +287,11 @@ def test_openai_wrap_openai_async_client_emits_events():
                 )
 
     final = asyncio.run(run_async())
+    # ====================================================================
+
     assert "alex.doe@example.com" in final.lower()
 
+    events = captured_events
     hooks = [e["hook"] for e in events]
     # Async path must produce real tokens (regression — the older sync
     # wrapper returned a coroutine and reported zero tokens here).
