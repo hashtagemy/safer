@@ -1,0 +1,133 @@
+name: Auto Release
+
+# Tag-driven release for both `safer-sdk` and `safer-backend`. Pushing
+# a tag like `v0.1.0` builds both packages, publishes them to PyPI via
+# a stored API token, and opens a GitHub Release with the standard
+# `pip install` instructions for each.
+#
+# Both packages always release together at the same version — they
+# ship as a matched pair (`safer-backend` pins `safer-sdk>=0.1.0,<0.2`).
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write   # for creating the GitHub Release
+  id-token: write   # reserved for future Trusted Publishing migration
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Extract version from tag
+        id: get_version
+        run: |
+          VERSION="${GITHUB_REF#refs/tags/v}"
+          echo "version=${VERSION}" >> "${GITHUB_OUTPUT}"
+          echo "Releasing v${VERSION}"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install build tooling
+        run: |
+          python -m pip install --upgrade pip
+          pip install build twine
+
+      - name: Sanity-check tag matches both pyproject versions
+        run: |
+          TAG="${{ steps.get_version.outputs.version }}"
+          SDK_VERSION=$(python -c "import tomllib; print(tomllib.load(open('packages/sdk/pyproject.toml','rb'))['project']['version'])")
+          BACKEND_VERSION=$(python -c "import tomllib; print(tomllib.load(open('packages/backend/pyproject.toml','rb'))['project']['version'])")
+          echo "tag=${TAG}  sdk=${SDK_VERSION}  backend=${BACKEND_VERSION}"
+          if [ "${TAG}" != "${SDK_VERSION}" ]; then
+            echo "::error::Tag v${TAG} does not match safer-sdk version ${SDK_VERSION}"
+            exit 1
+          fi
+          if [ "${TAG}" != "${BACKEND_VERSION}" ]; then
+            echo "::error::Tag v${TAG} does not match safer-backend version ${BACKEND_VERSION}"
+            exit 1
+          fi
+
+      - name: Build safer-sdk
+        run: python -m build packages/sdk --outdir dist/
+
+      - name: Build safer-backend
+        run: python -m build packages/backend --outdir dist/
+
+      - name: List artifacts
+        run: ls -la dist/
+
+      - name: Publish to PyPI
+        env:
+          TWINE_USERNAME: __token__
+          TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
+        run: twine upload --non-interactive --skip-existing dist/*
+
+      - name: Create GitHub Release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ github.ref }}
+          release_name: SAFER v${{ steps.get_version.outputs.version }}
+          body: |
+            ## SAFER v${{ steps.get_version.outputs.version }}
+
+            ### Install
+
+            ```bash
+            # SDK only — what you put in your agent project
+            pip install safer-sdk==${{ steps.get_version.outputs.version }}
+
+            # Optional framework extras
+            pip install 'safer-sdk[strands]==${{ steps.get_version.outputs.version }}'
+            pip install 'safer-sdk[langchain]==${{ steps.get_version.outputs.version }}'
+            pip install 'safer-sdk[google-adk]==${{ steps.get_version.outputs.version }}'
+            pip install 'safer-sdk[openai]==${{ steps.get_version.outputs.version }}'
+            pip install 'safer-sdk[claude]==${{ steps.get_version.outputs.version }}'
+
+            # Backend — Agent Control Plane server
+            pip install safer-backend==${{ steps.get_version.outputs.version }}
+            ```
+
+            ### Upgrade
+
+            ```bash
+            pip install --upgrade safer-sdk safer-backend
+            ```
+
+            ### What's new
+
+            See the auto-generated diff:
+            https://github.com/hashtagemy/safer/compare/...v${{ steps.get_version.outputs.version }}
+
+            ### Links
+
+            - SDK on PyPI: https://pypi.org/project/safer-sdk/${{ steps.get_version.outputs.version }}/
+            - Backend on PyPI: https://pypi.org/project/safer-backend/${{ steps.get_version.outputs.version }}/
+            - Documentation: https://github.com/hashtagemy/safer#readme
+            - Issues: https://github.com/hashtagemy/safer/issues
+          draft: false
+          prerelease: false
+
+      - name: Summary
+        run: |
+          {
+            echo "## Release Summary"
+            echo ""
+            echo "- **Version:** v${{ steps.get_version.outputs.version }}"
+            echo "- **safer-sdk:** https://pypi.org/project/safer-sdk/${{ steps.get_version.outputs.version }}/"
+            echo "- **safer-backend:** https://pypi.org/project/safer-backend/${{ steps.get_version.outputs.version }}/"
+            echo "- **GitHub Release:** https://github.com/hashtagemy/safer/releases/tag/v${{ steps.get_version.outputs.version }}"
+          } >> "${GITHUB_STEP_SUMMARY}"
