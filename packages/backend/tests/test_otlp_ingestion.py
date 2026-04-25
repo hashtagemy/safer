@@ -237,3 +237,88 @@ def test_http_endpoint_rejects_malformed_body():
         headers={"content-type": "application/x-protobuf"},
     )
     assert resp.status_code == 400
+
+
+def test_chat_span_cost_enriched_via_shared_pricing_table():
+    """Regression: earlier the OTLP parser hardcoded cost_usd=0 on every
+    chat span.  Now it consults `safer._pricing.estimate_cost`."""
+    provider, exporter = _fresh_exporter()
+    tracer = provider.get_tracer("cost-test")
+    with tracer.start_as_current_span("chat claude-haiku-4-5") as span:
+        span.set_attribute("gen_ai.system", "anthropic")
+        span.set_attribute("gen_ai.operation.name", "chat")
+        span.set_attribute("gen_ai.request.model", "claude-haiku-4-5")
+        span.set_attribute("gen_ai.response.model", "claude-haiku-4-5")
+        span.set_attribute("gen_ai.usage.input_tokens", 1000)
+        span.set_attribute("gen_ai.usage.output_tokens", 500)
+
+    spans = parse_otlp_request(_serialize(exporter), "application/x-protobuf")
+    events = map_genai_span_to_safer(spans[0])
+    after = next(e for e in events if e.hook.value == "after_llm_call")
+    # Haiku 4.5: $1 input + $5 output per 1M
+    expected = (1000 * 1.0 + 500 * 5.0) / 1_000_000
+    assert abs(after.cost_usd - expected) < 1e-9
+
+
+def test_chat_span_with_tool_call_id_synthesizes_agent_decision():
+    """When the OTel anthropic instrumentor includes `gen_ai.tool.call.id`
+    on a chat span (signalling that the model returned a tool_use block),
+    SAFER must synthesize an `on_agent_decision` event so the Multi-Persona
+    Judge's decision-hook personas (Scope, Policy Warden) can run."""
+    provider, exporter = _fresh_exporter()
+    tracer = provider.get_tracer("decision-synth")
+    with tracer.start_as_current_span("chat claude-opus-4-7") as span:
+        span.set_attribute("gen_ai.operation.name", "chat")
+        span.set_attribute("gen_ai.request.model", "claude-opus-4-7")
+        span.set_attribute("gen_ai.tool.call.id", "tool_use_xyz")
+        span.set_attribute("gen_ai.tool.call.name", "read_file")
+        span.set_attribute("gen_ai.usage.input_tokens", 50)
+        span.set_attribute("gen_ai.usage.output_tokens", 12)
+
+    spans = parse_otlp_request(_serialize(exporter), "application/x-protobuf")
+    events = map_genai_span_to_safer(spans[0])
+    hook_names = [e.hook.value for e in events]
+    assert "on_agent_decision" in hook_names
+    decision = next(e for e in events if e.hook.value == "on_agent_decision")
+    assert decision.decision_type == "tool_call"
+    assert decision.chosen_action == "read_file"
+
+
+def test_chat_span_without_tool_call_id_does_NOT_synthesize_decision():
+    """Conservative: only emit a synthesized agent_decision when the
+    chat span explicitly carries `gen_ai.tool.call.id`.  Avoids false
+    positives on plain text completions."""
+    provider, exporter = _fresh_exporter()
+    tracer = provider.get_tracer("no-synth")
+    with tracer.start_as_current_span("chat gpt-4o") as span:
+        span.set_attribute("gen_ai.operation.name", "chat")
+        span.set_attribute("gen_ai.request.model", "gpt-4o")
+        span.set_attribute("gen_ai.usage.input_tokens", 10)
+        span.set_attribute("gen_ai.usage.output_tokens", 5)
+
+    spans = parse_otlp_request(_serialize(exporter), "application/x-protobuf")
+    events = map_genai_span_to_safer(spans[0])
+    hook_names = [e.hook.value for e in events]
+    assert "on_agent_decision" not in hook_names
+
+
+def test_cache_read_token_alias_picks_up_newer_attribute_keys():
+    """Newer GenAI semconv versions may use `gen_ai.usage.cache_read_tokens`
+    or `gen_ai.prompt_cache.cached_input_tokens`.  We accept all aliases."""
+    provider, exporter = _fresh_exporter()
+    tracer = provider.get_tracer("cache-aliases")
+    with tracer.start_as_current_span("chat claude-sonnet-4-6") as span:
+        span.set_attribute("gen_ai.operation.name", "chat")
+        span.set_attribute("gen_ai.request.model", "claude-sonnet-4-6")
+        span.set_attribute("gen_ai.usage.input_tokens", 1000)
+        span.set_attribute("gen_ai.usage.output_tokens", 100)
+        # Newer alias — older parser missed this entirely
+        span.set_attribute("gen_ai.usage.cache_read_tokens", 600)
+
+    spans = parse_otlp_request(_serialize(exporter), "application/x-protobuf")
+    events = map_genai_span_to_safer(spans[0])
+    after = next(e for e in events if e.hook.value == "after_llm_call")
+    assert after.cache_read_tokens == 600
+    # Cost reflects the cache_read discount: billable = 1000 - 600 = 400
+    expected = (400 * 3.0 + 600 * 0.30 + 100 * 15.0) / 1_000_000
+    assert abs(after.cost_usd - expected) < 1e-9

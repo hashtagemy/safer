@@ -6,7 +6,7 @@
 
 [![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/downloads/)
-[![Tests](https://img.shields.io/badge/tests-281%20passing-brightgreen.svg)](#testing)
+[![Tests](https://img.shields.io/badge/tests-357%20passing-brightgreen.svg)](#testing)
 [![Claude Hackathon 2026](https://img.shields.io/badge/Claude%20Hackathon-2026-purple.svg)](https://www.cerebralvalley.ai/)
 
 AI agents are shipping faster than anyone can audit them. SAFER gives
@@ -79,7 +79,7 @@ SAFER is opinionated about the shape of that missing layer:
 | **Assure** | Risk score + OWASP-aligned findings | **Red-Team Squad** — 3-stage adversarial evaluation (Strategist → Attacker → Analyst) mapped to OWASP LLM Top 10 | Block Moment toast with explainability drawer | **Session Report** — 7-category health card + **Compliance Pack** (GDPR / SOC 2 / OWASP LLM) in PDF / HTML / JSON |
 
 Everything above is wired end-to-end in the current release and
-verified by the 281-test suite.
+verified by the 357-test suite.
 
 ---
 
@@ -364,18 +364,30 @@ complete walkthrough.
 
 ## Framework matrix
 
-| Framework | Integration layer | Auto hooks | Two-line adapter call |
+The `Verified hook coverage` column reflects what each adapter actually
+emits in the unit-test suite — not a marketing number.  An "auto" hook is
+one that fires without the user adding manual `track_event` calls beyond
+the two-line integration shown.
+
+| Framework | Integration layer | Verified hook coverage | Two-line adapter call |
 |---|---|---|---|
-| Google ADK | Runner plugin (`BasePlugin`) | **10/10** | `plugins=[SaferAdkPlugin(agent_id=..., agent_name=...)]` |
-| AWS Strands | Agent hooks (`HookProvider`) | **10/10** | `hooks=[SaferHookProvider(agent_id=..., agent_name=...)]` |
-| LangChain / LangGraph | Callback handler | **10/10** | `config={"callbacks": [SaferCallbackHandler(agent_id=...)]}` |
-| Anthropic (raw SDK) — OTel bridge | OTel GenAI spans → `/v1/traces` | **10/10** | `configure_otel_bridge(agent_id=..., instrument=["anthropic"])` |
-| OpenAI (raw SDK) — OTel bridge | OTel GenAI spans → `/v1/traces` | **10/10** | `configure_otel_bridge(agent_id=..., instrument=["openai"])` |
-| Anthropic (raw SDK) — client proxy | `messages.create` wrapped | 3/10 automatic + manual helpers | `wrap_anthropic(Anthropic(), agent_id=...)` |
-| OpenAI (raw SDK) — client proxy | `*.create` wrapped | 4/10 automatic + manual helpers | `wrap_openai(OpenAI(), agent_id=...)` |
-| AWS Bedrock Agents | — | 0/10 (planned) | manual `safer.track_event(...)` |
-| CrewAI | — | 0/10 (planned) | manual `safer.track_event(...)` |
+| Google ADK | Runner plugin (`BasePlugin`) | **10/10** auto (1 onboarding + 9 runtime, all unit-tested) | `plugins=[SaferAdkPlugin(agent_id=..., agent_name=...)]` |
+| AWS Strands | Agent hooks (`HookProvider`) | **10/10** auto for single-agent runs; multi-agent / graph events not bridged yet | `hooks=[SaferHookProvider(agent_id=..., agent_name=...)]` |
+| LangChain (AgentExecutor) | Callback handler | **10/10** auto via `on_chain_start/end` + `on_agent_action/finish` | `config={"callbacks": [SaferCallbackHandler(agent_id=...)]}` |
+| LangChain LCEL / LangGraph | Callback handler | **10/10** auto — root run_id detection closes the SAFER session even without `on_agent_finish` | same as above |
+| Anthropic (raw SDK) — native subclass | `Anthropic`/`AsyncAnthropic` subclass + `cached_property` override | **10/10** auto — incl. tool_use detection + tool_result pairing on next call | `client = SaferAnthropic(agent_id=..., api_key=...)` |
+| Anthropic (raw SDK) — `wrap_anthropic` | `messages.create` instrumented | **10/10** auto for `messages.create` + `messages.stream`; `final_output` is manual | `wrap_anthropic(Anthropic(), agent_id=...)` |
+| OpenAI (raw SDK) — `wrap_openai` | `chat.completions` + `responses` instrumented | **10/10** auto incl. async, streaming (chat + responses), `with_raw_response`, tool_call detection, `tool_result` pairing | `wrap_openai(OpenAI(), agent_id=...)` |
+| OpenAI Agents SDK | `RunHooks` + `TracingProcessor` | **10/10** auto via the SDK's first-class hook surface — handoffs, multi-agent runs included | `Runner.run(agent, input, hooks=install_safer_for_agents(agent_id=...))` |
+| Anthropic / OpenAI — OTel bridge (opt-in) | OpenLLMetry instrumentor → `/v1/traces` | **6-7/10**: session, before/after_llm, on_error, final_output, session_end auto; `on_agent_decision` synthesized when chat span carries `gen_ai.tool.call.id`; `before/after_tool_use` only when the user's tool code emits its own `execute_tool` spans (raw SDK calls don't) | `configure_otel_bridge(agent_id=..., instrument=["anthropic"])` |
+| AWS Bedrock Agents | — | not yet implemented | use `safer.track_event(...)` until a native adapter ships |
+| CrewAI | — | not yet implemented | same |
 | LlamaIndex / AutoGen / anything | Custom SDK | manual | `safer.track_event(Hook.*, payload)` |
+
+> **Tip.** For raw OpenAI / Anthropic code, prefer the native subclass
+> (`SaferAnthropic`) or `wrap_*` helper over the OTel bridge — they
+> see the model's tool_use intent and can pair tool results, while the
+> OTel bridge can only observe what the SDK itself instruments.
 
 ### Adding your own framework
 
@@ -412,12 +424,18 @@ payloads. Pydantic models live in
 
 | Adapter | session start/end | llm call pair | tool use pair | agent decision | final output | error |
 |---|---|---|---|---|---|---|
-| Google ADK `SaferAdkPlugin` | ✅ | ✅ | ✅ | ✅ (synth from `on_event` tool_use) | ✅ | ✅ |
-| Strands `SaferHookProvider` | ✅ | ✅ | ✅ | ✅ (synth from `MessageAdded`) | ✅ | ✅ |
-| LangChain `SaferCallbackHandler` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| OTel bridge (Anthropic / OpenAI) | ✅ | ✅ | ✅ | ✅ (from `gen_ai.operation.name`) | ✅ | ✅ |
-| Anthropic `wrap_anthropic` | session_start only | ✅ | manual | manual | manual | manual |
-| OpenAI `wrap_openai` | session_start only | ✅ | manual | manual | manual | ✅ |
+| Google ADK `SaferAdkPlugin` | ✅ rotates per `Runner.run_async` invocation | ✅ | ✅ | ✅ (synth from `on_event` tool_use) | ✅ | ✅ |
+| Strands `SaferHookProvider` | ✅ rotates per `agent(prompt)` invocation | ✅ | ✅ | ✅ (synth from `MessageAdded`) | ✅ | ✅ |
+| LangChain `SaferCallbackHandler` | ✅ root run_id (works for AgentExecutor, LCEL, LangGraph) | ✅ | ✅ | ✅ | ✅ | ✅ |
+| LangChain `AsyncSaferCallbackHandler` | ✅ same logic, native async dispatch | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Anthropic `SaferAnthropic` (native subclass) | ✅ | ✅ (incl. `messages.stream`) | ✅ tool_use auto-detect + `tool_result` pairing | ✅ from response content | ✅ via `final_output()` | ✅ |
+| Anthropic `SaferAsyncAnthropic` | ✅ | ✅ async + stream | ✅ | ✅ | ✅ | ✅ |
+| Anthropic `wrap_anthropic` proxy | manual (`agent.start_session`) | ✅ | ✅ tool_use auto-detect + pairing | ✅ | manual | ✅ |
+| OpenAI `wrap_openai` (chat.completions) | ✅ via first call + `atexit` close | ✅ + streaming accumulator | ✅ tool_call detection + `role="tool"` pairing | ✅ | ✅ on stream/finish_reason | ✅ |
+| OpenAI `wrap_openai` (responses) | ✅ | ✅ + `output_text` extraction | ✅ from `function_call` items | ✅ | ✅ | ✅ |
+| OpenAI `wrap_openai` (`with_raw_response`) | ✅ | ✅ unwraps `LegacyAPIResponse.parse()` | ✅ | ✅ | ✅ | ✅ |
+| OpenAI Agents SDK `SaferRunHooks` | ✅ rotates per `Runner.run` | ✅ from `ModelResponse.usage` | ✅ from `ToolContext` | ✅ (synth on tool_start + handoff) | ✅ from `on_agent_end` | ✅ via `SaferTracingProcessor` |
+| OTel bridge (Anthropic / OpenAI) | ✅ per trace_id | ✅ | ⚠️ only when `execute_tool` spans exist | ⚠️ synth from `gen_ai.tool.call.id` when present | ✅ from root span end | ✅ |
 
 ---
 
@@ -487,11 +505,12 @@ Hard rules (also in [`CLAUDE.md`](CLAUDE.md)):
 |---|---|---|
 | [`examples/google-adk`](examples/google-adk) | Google ADK + Gemini | Repo Analyst agent via `Runner(plugins=[SaferAdkPlugin(...)])` — 10/10 SAFER hooks automatic |
 | [`examples/strands`](examples/strands) | Strands Agents + Anthropic | System Diagnostic agent via `Agent(hooks=[SaferHookProvider(...)])` with real `ps` / `df` / log tools + a dangerous `run_shell` for policy demos |
-| [`examples/anthropic-otel`](examples/anthropic-otel) | Raw Anthropic SDK + OTel bridge | Tool-calling loop observed via `configure_otel_bridge(instrument=["anthropic"])` — 10/10 hooks, no wrap_anthropic |
+| [`examples/anthropic-otel`](examples/anthropic-otel) | Raw Anthropic SDK + OTel bridge | Tool-calling loop observed via `configure_otel_bridge(instrument=["anthropic"])` — see hook coverage table for current OTel limits |
 | [`examples/openai-otel`](examples/openai-otel) | Raw OpenAI SDK + OTel bridge | `summarize_url` tool loop observed via `configure_otel_bridge(instrument=["openai"])` |
 | [`examples/customer-support`](examples/customer-support) | Anthropic Claude Agent SDK (low-level client proxy) | Customer-support bot with intentionally risky tools — demo for `wrap_anthropic` + manual helpers |
 | [`examples/code-analyst`](examples/code-analyst) | LangChain + `langchain-anthropic` | Tool-calling agent that reads / greps / AST-scans this repo; shows `SaferCallbackHandler` end-to-end |
 | [`examples/vanilla-python`](examples/vanilla-python) | None (custom SDK) | Minimal 60-line manual instrumentation using `safer.track_event()` |
+| [`examples/coding_assistant`](examples/coding_assistant) | Anthropic Agent SDK supervisor + worker | Multi-agent chat with 6 tools and 4 deliberate security flaws — exercises `/live` parent/child sessions, Inspector findings, Gateway block path |
 
 Each example has its own `README.md` with prereqs and run commands.
 
@@ -560,7 +579,7 @@ uv run ruff format .
 ## Testing
 
 ```bash
-uv run pytest              # 281 tests, 3 skipped
+uv run pytest              # 357 tests, 2 skipped
 ```
 
 Test coverage:

@@ -265,3 +265,212 @@ def test_no_system_prompt_means_no_profile_patch(monkeypatch):
     )
 
     assert calls == []
+
+
+# ----- new in Faz 35.6 -----------------------------------------------------
+
+
+def _mock_tool_use_response(tool_name: str, tool_input: dict, tool_id: str = "tu_1"):
+    """A Message response containing a tool_use block (model decided to call a tool)."""
+    return SimpleNamespace(
+        model="claude-opus-4-7",
+        stop_reason="tool_use",
+        content=[
+            SimpleNamespace(type="text", text="I'll call the tool."),
+            SimpleNamespace(
+                type="tool_use", id=tool_id, name=tool_name, input=tool_input
+            ),
+        ],
+        usage=SimpleNamespace(
+            input_tokens=20,
+            output_tokens=8,
+            cache_read_input_tokens=0,
+            cache_creation_input_tokens=0,
+        ),
+    )
+
+
+def test_tool_use_response_auto_emits_decision_and_before_tool_use():
+    """When the model returns a tool_use block, the adapter must auto-emit
+    on_agent_decision + before_tool_use without the user having to call
+    helper methods manually."""
+    client = safer.instrument(api_url="http://127.0.0.1:59999")
+    events = _capture_events(client)
+
+    fake = _FakeAnthropic(_mock_tool_use_response("read_file", {"path": "x.md"}))
+    agent = wrap_anthropic(fake, agent_id="auto_tool")
+    agent.messages.create(
+        model="claude-opus-4-7",
+        messages=[{"role": "user", "content": "read x.md"}],
+        tools=[{"name": "read_file", "description": "Read"}],
+    )
+
+    hooks = [e["hook"] for e in events]
+    assert "on_agent_decision" in hooks
+    assert "before_tool_use" in hooks
+
+    decision = next(e for e in events if e["hook"] == "on_agent_decision")
+    assert decision["decision_type"] == "tool_call"
+    assert "read_file" in decision["chosen_action"]
+    assert "x.md" in decision["chosen_action"]
+
+    before_tool = next(e for e in events if e["hook"] == "before_tool_use")
+    assert before_tool["tool_name"] == "read_file"
+    assert before_tool["args"] == {"path": "x.md"}
+
+
+def test_tool_result_in_next_request_synthesizes_after_tool_use():
+    """After the user feeds the tool result back via the next messages.create,
+    the adapter should auto-emit after_tool_use paired by tool_use_id."""
+    client = safer.instrument(api_url="http://127.0.0.1:59999")
+    events = _capture_events(client)
+
+    # First call returns a tool_use
+    fake = _FakeAnthropic(_mock_tool_use_response("read_file", {"path": "x.md"}, tool_id="tu_alpha"))
+    agent = wrap_anthropic(fake, agent_id="pair_synth")
+    agent.messages.create(
+        model="claude-opus-4-7",
+        messages=[{"role": "user", "content": "read"}],
+    )
+
+    # Now swap the response: model concludes
+    fake.messages = _FakeMessages(_mock_response("the file says hi"))
+
+    # User feeds back tool_result
+    agent.messages.create(
+        model="claude-opus-4-7",
+        messages=[
+            {"role": "user", "content": "read"},
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "tool_use", "id": "tu_alpha", "name": "read_file", "input": {"path": "x.md"}},
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "tu_alpha",
+                        "content": "file contents: hello",
+                    }
+                ],
+            },
+        ],
+    )
+
+    after = [e for e in events if e["hook"] == "after_tool_use"]
+    assert len(after) == 1
+    assert after[0]["tool_name"] == "read_file"
+    assert "file contents: hello" in after[0]["result"]
+
+
+def test_async_anthropic_proxy_actually_awaits():
+    """Critical regression: AsyncAnthropic.messages.create returns a coroutine
+    that MUST be awaited.  Older sync proxy silently dropped the await,
+    so the API call never went out and SAFER emitted bogus events with
+    zero tokens.  The async proxy MUST emit real after_llm_call data."""
+    import asyncio
+
+    client = safer.instrument(api_url="http://127.0.0.1:59999")
+    events = _capture_events(client)
+
+    # Build a fake AsyncAnthropic-style client whose messages.create is async
+    class _AsyncFakeMessages:
+        async def create(self, **kwargs):
+            return _mock_response("async hi", tokens_in=42, tokens_out=7)
+
+    class _AsyncFakeAnthropic:
+        def __init__(self):
+            self.messages = _AsyncFakeMessages()
+
+    # Pretend it's an AsyncAnthropic — use duck typing
+    async def run():
+        # Manually construct AnthropicTracker bypassing the isinstance check
+        from safer.adapters.claude_sdk import _AsyncMessagesProxy, AnthropicTracker
+
+        fake = _AsyncFakeAnthropic()
+        tracker = AnthropicTracker.__new__(AnthropicTracker)
+        # Initialize the emitter base
+        from safer.adapters.claude_sdk import _AnthropicEventEmitter
+
+        _AnthropicEventEmitter.__init__(
+            tracker,
+            agent_id="async_test",
+            agent_name="async_test",
+            session_id=None,
+            safer_client=None,
+        )
+        tracker._client = fake
+        tracker.messages = _AsyncMessagesProxy(fake.messages, tracker)
+        result = await tracker.messages.create(
+            model="claude-haiku-4-5",
+            messages=[{"role": "user", "content": "ping"}],
+        )
+        return result
+
+    result = asyncio.run(run())
+    assert result is not None
+
+    after_llm = next(e for e in events if e["hook"] == "after_llm_call")
+    # Real numbers, not zeros — proves the await actually completed
+    assert after_llm["tokens_in"] == 42
+    assert after_llm["tokens_out"] == 7
+    assert after_llm["response"] == "async hi"
+
+
+def test_step_count_increments_per_create_call():
+    """Older code never incremented `_step_count` on create() — final_output
+    reported total_steps=0 for multi-call sessions."""
+    client = safer.instrument(api_url="http://127.0.0.1:59999")
+    events = _capture_events(client)
+
+    fake = _FakeAnthropic(_mock_response())
+    agent = wrap_anthropic(fake, agent_id="step_count")
+    for _ in range(3):
+        agent.messages.create(
+            model="claude-haiku-4-5",
+            messages=[{"role": "user", "content": "ping"}],
+        )
+
+    after_calls = [e for e in events if e["hook"] == "after_llm_call"]
+    assert len(after_calls) == 3
+    # _step_count incremented 3 times via _next_seq fallback (the safer client
+    # sequence path also works); either way, sequence numbers must be unique
+    seqs = [e["sequence"] for e in events]
+    assert len(seqs) == len(set(seqs)), f"duplicate sequence numbers: {seqs}"
+
+
+def test_safer_anthropic_native_subclass_constructs_and_has_messages():
+    """`SaferAnthropic` is a real Anthropic subclass; its `messages` resource
+    is a `Messages` subclass with the SAFER emitter attached."""
+    from anthropic import Anthropic
+    from anthropic.resources.messages.messages import Messages
+
+    from safer.adapters.claude_sdk import SaferAnthropic
+
+    client = SaferAnthropic(
+        agent_id="native_test", agent_name="Native", api_key="sk-test-fake"
+    )
+    assert isinstance(client, Anthropic)
+    assert isinstance(client.messages, Messages)
+    # The override carries the emitter
+    assert hasattr(client.messages, "_safer_emitter")
+    assert client.messages._safer_emitter.agent_id == "native_test"
+
+
+def test_safer_async_anthropic_native_subclass():
+    """Async sibling: `SaferAsyncAnthropic` extends `AsyncAnthropic` and
+    overrides `messages` with an `AsyncMessages` subclass."""
+    from anthropic import AsyncAnthropic
+    from anthropic.resources.messages.messages import AsyncMessages
+
+    from safer.adapters.claude_sdk import SaferAsyncAnthropic
+
+    client = SaferAsyncAnthropic(
+        agent_id="native_async", agent_name="Native Async", api_key="sk-test-fake"
+    )
+    assert isinstance(client, AsyncAnthropic)
+    assert isinstance(client.messages, AsyncMessages)
+    assert hasattr(client.messages, "_safer_emitter")

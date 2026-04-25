@@ -72,6 +72,9 @@ def _make_agent(
     return SimpleNamespace(
         model=model,
         tool_registry=tool_registry,
+        # Real Strands `Agent` exposes `tool_names` directly — the new
+        # adapter prefers this path over walking tool_registry.
+        tool_names=list(tools or []),
         messages=list(messages or []),
         system_prompt=system_prompt,
         event_loop_metrics=metrics,
@@ -337,3 +340,73 @@ def test_session_start_fires_exactly_once(_reset_runtime_and_install_dummy):
     provider._on_before_model_call(SimpleNamespace(agent=agent, invocation_state={}))
     starts = [c for c in calls if c["hook"] == "on_session_start"]
     assert len(starts) == 1
+
+
+def test_session_id_rotates_per_invocation(_reset_runtime_and_install_dummy):
+    """Critical regression: a single SaferHookProvider used for multiple
+    `agent(prompt)` calls must produce a distinct SAFER session_id per
+    invocation.  Earlier versions cached session_id in __init__, causing
+    every turn to write to the same backend session — the dashboard saw
+    a 'closed' session receive new events forever."""
+    calls = _reset_runtime_and_install_dummy
+    from safer.adapters.strands import SaferHookProvider
+
+    provider = SaferHookProvider(agent_id="s_rotate")
+    agent = _make_agent()
+
+    # Invocation 1: full lifecycle
+    provider._on_before_invocation(
+        SimpleNamespace(agent=agent, invocation_state={}, messages=[])
+    )
+    sid_1 = provider.session_id
+    provider._on_after_invocation(
+        SimpleNamespace(
+            agent=agent,
+            invocation_state={},
+            result=SimpleNamespace(message=_assistant_message("done 1")),
+            resume=None,
+        )
+    )
+
+    # Invocation 2: full lifecycle (re-using the same provider instance)
+    provider._on_before_invocation(
+        SimpleNamespace(agent=agent, invocation_state={}, messages=[])
+    )
+    sid_2 = provider.session_id
+    provider._on_after_invocation(
+        SimpleNamespace(
+            agent=agent,
+            invocation_state={},
+            result=SimpleNamespace(message=_assistant_message("done 2")),
+            resume=None,
+        )
+    )
+
+    assert sid_1 != sid_2, "session_id must rotate per Strands invocation"
+
+    # Two start events with two distinct session_ids
+    starts = [c for c in calls if c["hook"] == "on_session_start"]
+    ends = [c for c in calls if c["hook"] == "on_session_end"]
+    assert len(starts) == 2
+    assert len(ends) == 2
+    sids = {s["session_id"] for s in starts}
+    assert len(sids) == 2, f"expected 2 unique session_ids, got {sids}"
+
+
+def test_tool_names_uses_direct_attribute(_reset_runtime_and_install_dummy):
+    """Regression: the previous adapter helper walked tool_registry.tool_names
+    via callable invocation; the cleaner path is `agent.tool_names`.  Confirm
+    the new helper uses the direct attribute."""
+    calls = _reset_runtime_and_install_dummy
+    from safer.adapters.strands import SaferHookProvider
+
+    provider = SaferHookProvider(agent_id="s_tools")
+    agent = _make_agent(tools=["tool_a", "tool_b"])
+    provider._on_before_invocation(
+        SimpleNamespace(agent=agent, invocation_state={}, messages=[])
+    )
+    provider._on_before_model_call(SimpleNamespace(agent=agent, invocation_state={}))
+
+    before_llm = next(c for c in calls if c["hook"] == "before_llm_call")
+    tool_names = [t["name"] for t in before_llm["payload"]["tools"]]
+    assert sorted(tool_names) == ["tool_a", "tool_b"]

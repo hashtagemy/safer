@@ -62,38 +62,23 @@ from ._bootstrap import ensure_runtime
 log = logging.getLogger("safer.adapters.strands")
 
 
-# ---------- pricing (Bedrock Claude + direct Anthropic Claude) -----------
-
-_PRICING_CLAUDE: dict[str, tuple[float, float, float, float]] = {
-    # (input, output, cache_read, cache_write) USD / 1M tokens
-    "claude-opus-4-7": (15.0, 75.0, 1.5, 18.75),
-    "claude-opus-4-5": (15.0, 75.0, 1.5, 18.75),
-    "claude-sonnet-4-6": (3.0, 15.0, 0.30, 3.75),
-    "claude-haiku-4-5": (0.80, 4.0, 0.08, 1.0),
-    # Bedrock model IDs
-    "anthropic.claude-opus-4-7-v1:0": (15.0, 75.0, 1.5, 18.75),
-    "anthropic.claude-sonnet-4-6-v1:0": (3.0, 15.0, 0.30, 3.75),
-    "anthropic.claude-haiku-4-5-v1:0": (0.80, 4.0, 0.08, 1.0),
-}
+# ---------- pricing — delegated to safer._pricing (Bedrock aliases handled there)
 
 
 def _estimate_cost(
     model: str, tokens_in: int, tokens_out: int, cache_read: int = 0
 ) -> float:
-    pricing = _PRICING_CLAUDE.get(model)
-    if pricing is None:
-        for key, value in _PRICING_CLAUDE.items():
-            # match Bedrock-prefixed variant to the direct name too
-            if model.startswith(key) or key.endswith(model):
-                pricing = value
-                break
-    if pricing is None:
-        pricing = _PRICING_CLAUDE["claude-opus-4-7"]
-    p_in, p_out, p_cr, _p_cw = pricing
-    billable_in = max(0, tokens_in - cache_read)
-    return (
-        (billable_in * p_in) + (tokens_out * p_out) + (cache_read * p_cr)
-    ) / 1_000_000
+    """Estimate USD cost via the shared pricing table; 0.0 for unknown models.
+
+    Strands users can wire any Anthropic model — direct (`claude-opus-4-7`)
+    or Bedrock-hosted (`anthropic.claude-opus-4-7-v1:0`).  The `_pricing`
+    module's `match_model` resolves both to the same pricing entry."""
+    from .._pricing import estimate_cost
+
+    cost = estimate_cost(
+        model, tokens_in=tokens_in, tokens_out=tokens_out, cache_read=cache_read
+    )
+    return cost or 0.0
 
 
 # ---------- content helpers --------------------------------------------
@@ -188,18 +173,18 @@ def _tool_result_text(result: Any) -> str:
 
 
 def _agent_tool_names(agent: Any) -> list[dict[str, Any]]:
+    """Return SAFER tool descriptors for every tool registered on the agent.
+
+    Strands `Agent` exposes `agent.tool_names` directly (a list of registered
+    tool names) — that's the canonical source.  Falls back to walking
+    `agent.tool_registry.registry` for older Strands versions or duck types
+    that don't expose `tool_names`."""
+    direct = getattr(agent, "tool_names", None)
+    if isinstance(direct, (list, tuple, set)):
+        return [{"name": str(n)} for n in direct]
     registry = getattr(agent, "tool_registry", None)
     if registry is None:
         return []
-    names = getattr(registry, "tool_names", None)
-    if callable(names):
-        try:
-            names = names()
-        except Exception:
-            names = None
-    if isinstance(names, (list, tuple, set)):
-        return [{"name": str(n)} for n in names]
-    # Fallback: try keys of a dict-like registry
     config = getattr(registry, "registry", None)
     if isinstance(config, dict):
         return [{"name": str(k)} for k in config]
@@ -303,7 +288,12 @@ def _make_provider_cls() -> type:
             ensure_runtime(agent_id, agent_name)
             self.agent_id = agent_id
             self.agent_name = agent_name or agent_id
-            self.session_id = session_id or f"sess_{uuid.uuid4().hex[:16]}"
+            # `_initial_session_id` pins the FIRST invocation only.  Every
+            # subsequent `agent(prompt)` call (i.e. each Strands invocation)
+            # gets a fresh SAFER session_id via `_begin_invocation` —
+            # otherwise multiple turns would all write to the same session.
+            self._initial_session_id = session_id
+            self._current_session_id: str | None = None
             self._client = client
             self._session_started = False
             self._sequence = 0
@@ -312,6 +302,25 @@ def _make_provider_cls() -> type:
             self._tool_start_ts: dict[str, float] = {}
             self._profile_synced = False
             self._last_tokens: tuple[int, int, int] = (0, 0, 0)
+
+        @property
+        def session_id(self) -> str:
+            """Current SAFER session id (rotates per Strands invocation)."""
+            if self._current_session_id is None:
+                self._current_session_id = (
+                    self._initial_session_id or f"sess_{uuid.uuid4().hex[:16]}"
+                )
+            return self._current_session_id
+
+        def _begin_invocation(self) -> None:
+            """Start a fresh SAFER session for a new Strands invocation."""
+            self._current_session_id = f"sess_{uuid.uuid4().hex[:16]}"
+            self._session_started = False
+            self._sequence = 0
+            self._step_count = 0
+            self._model_start_ts = None
+            self._tool_start_ts.clear()
+            self._last_tokens = (0, 0, 0)
 
         # internal plumbing ----------------------------------------
 
@@ -395,6 +404,10 @@ def _make_provider_cls() -> type:
 
         def _on_before_invocation(self, event: Any) -> None:
             try:
+                # Each Strands invocation = one SAFER session.  Rotate the
+                # session_id here so multiple `agent(prompt)` calls on the
+                # same hook provider produce distinct backend sessions.
+                self._begin_invocation()
                 self._ensure_session_started()
             except Exception as e:
                 self._emit_error(e, "before_invocation")

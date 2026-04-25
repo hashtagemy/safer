@@ -2,13 +2,16 @@
 
 The `safer.adapters.google_adk` module ships `SaferAdkPlugin` as a
 `BasePlugin` subclass. These tests verify:
-  * all 13 ADK plugin callbacks are implemented as `async def`;
+  * all 12 ADK plugin callbacks (+ `close`) are implemented as `async def`;
   * the full callback sequence emits the 9 SAFER hooks in the expected
     order;
   * model/tool error callbacks produce `on_error` events;
   * `on_event_callback` synthesizes `on_agent_decision` from tool_use
-    function_call blocks;
-  * session start fires once; profile sync fires once;
+    function_call blocks; `before_agent_callback` does NOT emit a
+    second decision (regression: multi-persona Judge double-fire fix);
+  * session start fires once per invocation; profile sync fires once;
+  * the SAFER session_id rotates per ADK invocation so that multiple
+    `Runner.run_async` calls produce distinct sessions;
   * the legacy `attach_safer` shim binds six agent-level callback
     fields via sync adapters.
 
@@ -164,7 +167,7 @@ def test_module_imports_without_running_the_plugin():
     assert hasattr(mod, "wrap_adk")
 
 
-def test_plugin_all_thirteen_callbacks_are_async():
+def test_plugin_all_twelve_callbacks_plus_close_are_async():
     from safer.adapters.google_adk import SaferAdkPlugin
 
     plugin = SaferAdkPlugin(agent_id="repo_analyst", agent_name="Repo Analyst")
@@ -405,10 +408,117 @@ def test_attach_safer_legacy_shim_binds_six_agent_field_callbacks():
         assert callable(getattr(agent, attr)), f"agent.{attr} not set"
 
 
+def test_session_id_rotates_per_invocation(_reset_runtime_and_install_dummy):
+    """Critical regression: a single SaferAdkPlugin shared across multiple
+    `Runner.run_async()` calls must produce a distinct SAFER session_id
+    per invocation.  Earlier versions cached session_id in __init__,
+    causing every turn to write to the same backend session — the dashboard
+    showed a 'closed' session receiving new events forever."""
+    calls = _reset_runtime_and_install_dummy
+    from safer.adapters.google_adk import SaferAdkPlugin
+
+    plugin = SaferAdkPlugin(agent_id="multi_turn")
+    inv_ctx_1 = _make_invocation_context()
+    inv_ctx_2 = _make_invocation_context()
+    # Make sure the two invocation_ids actually differ
+    inv_ctx_1.invocation_id = "inv-aaaa-1111"
+    inv_ctx_2.invocation_id = "inv-bbbb-2222"
+
+    async def drive() -> None:
+        await plugin.before_run_callback(invocation_context=inv_ctx_1)
+        sid_1 = plugin.session_id
+        await plugin.after_run_callback(invocation_context=inv_ctx_1)
+
+        await plugin.before_run_callback(invocation_context=inv_ctx_2)
+        sid_2 = plugin.session_id
+        await plugin.after_run_callback(invocation_context=inv_ctx_2)
+
+        assert sid_1 != sid_2, "session_id must rotate per invocation"
+
+    asyncio.run(drive())
+
+    # And the emitted events must be tagged with the right session_id —
+    # there should be exactly two `on_session_start` and two `on_session_end`
+    # events, each pair sharing one session_id.
+    starts = [c for c in calls if c["hook"] == "on_session_start"]
+    ends = [c for c in calls if c["hook"] == "on_session_end"]
+    assert len(starts) == 2
+    assert len(ends) == 2
+    sids_seen = {s["session_id"] for s in starts}
+    assert len(sids_seen) == 2, f"each invocation must use a unique session_id; got {sids_seen}"
+
+
+def test_one_turn_emits_at_most_one_agent_decision_per_tool_call(
+    _reset_runtime_and_install_dummy,
+):
+    """Regression: `before_agent_callback` used to emit
+    `decision_type='agent_turn_start'` AND `on_event_callback` separately
+    emitted `decision_type='tool_call'` for the same tool — doubling
+    Multi-Persona Judge cost.  After the fix, `before_agent_callback` is
+    observation-only and only `on_event_callback` emits decisions for
+    actual tool calls."""
+    calls = _reset_runtime_and_install_dummy
+    from safer.adapters.google_adk import SaferAdkPlugin
+
+    plugin = SaferAdkPlugin(agent_id="no_double")
+    inv_ctx = _make_invocation_context()
+    cb_ctx = _make_callback_context()
+
+    async def drive() -> None:
+        await plugin.before_run_callback(invocation_context=inv_ctx)
+        # 2 agent turns with 1 tool call each
+        await plugin.before_agent_callback(agent=inv_ctx, callback_context=cb_ctx)
+        await plugin.on_event_callback(
+            invocation_context=inv_ctx, event=_make_event_with_tool_use("read_file")
+        )
+        await plugin.before_agent_callback(agent=inv_ctx, callback_context=cb_ctx)
+        await plugin.on_event_callback(
+            invocation_context=inv_ctx, event=_make_event_with_tool_use("grep_code")
+        )
+
+    asyncio.run(drive())
+    decisions = [c for c in calls if c["hook"] == "on_agent_decision"]
+    # Exactly one decision per tool_call event — NOT 2 per turn.
+    assert len(decisions) == 2, (
+        f"expected 2 on_agent_decision events (one per tool_call), got {len(decisions)}"
+    )
+    decision_types = [d["payload"]["decision_type"] for d in decisions]
+    assert decision_types == ["tool_call", "tool_call"]
+    # No `agent_turn_start` decisions (regression: this used to be emitted)
+    assert "agent_turn_start" not in decision_types
+
+
+def test_session_id_uses_invocation_id_when_available(_reset_runtime_and_install_dummy):
+    """The SAFER session_id should embed the ADK invocation_id (truncated)
+    so operators can correlate SAFER sessions back to ADK runs."""
+    _reset_runtime_and_install_dummy
+    from safer.adapters.google_adk import SaferAdkPlugin
+
+    plugin = SaferAdkPlugin(agent_id="corr")
+    inv_ctx = _make_invocation_context()
+    inv_ctx.invocation_id = "abcd1234efgh5678"
+
+    async def drive() -> None:
+        await plugin.before_run_callback(invocation_context=inv_ctx)
+
+    asyncio.run(drive())
+    assert plugin.session_id.startswith("sess_")
+    # session_id contains a truncation of the invocation_id (first 16 chars)
+    assert "abcd1234efgh5678" in plugin.session_id
+
+
 def test_cost_estimation_uses_gemini_pricing():
     from safer.adapters.google_adk import _estimate_cost
 
+    # Exact known model
     cost = _estimate_cost("gemini-2.5-pro", 1_000_000, 1_000_000, 0)
     assert abs(cost - 11.25) < 0.01  # 1.25 + 10.0 USD per 1M
-    cost_unknown = _estimate_cost("gemini-weirdname-preview", 1_000_000, 0, 0)
-    assert cost_unknown > 0
+
+    # Versioned snapshot resolves to base via prefix match in safer._pricing
+    cost_versioned = _estimate_cost("gemini-2.5-pro-preview", 1_000_000, 0, 0)
+    assert abs(cost_versioned - 1.25) < 0.01
+
+    # Truly unknown model returns 0.0 (we no longer silently fall back to a
+    # default rate — that produced large cost errors on unknown models).
+    cost_unknown = _estimate_cost("totally-fake-model-xyz", 1_000_000, 0, 0)
+    assert cost_unknown == 0.0

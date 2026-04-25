@@ -6,11 +6,11 @@ extension layers:
 
 * **Runner plugins** (`google.adk.plugins.base_plugin.BasePlugin`) —
   registered once via `Runner(plugins=[...])`, applied globally to every
-  agent run through the runner. Thirteen async callbacks cover the full
+  agent run through the runner. Twelve async callbacks cover the full
   invocation lifecycle (user message → run → agent → model → tool →
-  errors → event stream → shutdown). This is Google's recommended
-  integration point for cross-cutting concerns — logging, monitoring,
-  policy — and the layer SAFER uses.
+  errors → event stream). This is Google's recommended integration point
+  for cross-cutting concerns — logging, monitoring, policy — and the
+  layer SAFER uses.
 * **Agent-level callback fields** on `LlmAgent` — six slots
   (`before/after_agent/model/tool_callback`), agent-local. Useful for
   per-agent logic but misses `on_model_error`, `on_tool_error`,
@@ -77,34 +77,19 @@ from ._bootstrap import ensure_runtime
 log = logging.getLogger("safer.adapters.google_adk")
 
 
-# ---------- pricing (signal only; Google prices change often) ----------
-
-_PRICING_GEMINI: dict[str, tuple[float, float, float]] = {
-    # (input USD / 1M, output USD / 1M, cached USD / 1M)
-    "gemini-2.5-pro": (1.25, 10.0, 0.3125),
-    "gemini-2.5-flash": (0.30, 2.50, 0.075),
-    "gemini-2.0-flash": (0.10, 0.40, 0.025),
-    "gemini-1.5-pro": (1.25, 5.0, 0.3125),
-    "gemini-1.5-flash": (0.075, 0.30, 0.01875),
-}
+# ---------- pricing — delegated to safer._pricing --------------------------
 
 
 def _estimate_cost(
     model: str, tokens_in: int, tokens_out: int, cached: int = 0
 ) -> float:
-    pricing = _PRICING_GEMINI.get(model)
-    if pricing is None:
-        for key, value in _PRICING_GEMINI.items():
-            if model.startswith(key):
-                pricing = value
-                break
-    if pricing is None:
-        pricing = _PRICING_GEMINI["gemini-2.5-flash"]
-    p_in, p_out, p_cached = pricing
-    billable_in = max(0, tokens_in - cached)
-    return (
-        (billable_in * p_in) + (tokens_out * p_out) + (cached * p_cached)
-    ) / 1_000_000
+    """Estimate USD cost via the shared pricing table; 0.0 for unknown models."""
+    from .._pricing import estimate_cost
+
+    cost = estimate_cost(
+        model, tokens_in=tokens_in, tokens_out=tokens_out, cache_read=cached
+    )
+    return cost or 0.0
 
 
 # ---------- content / usage helpers ----------
@@ -223,8 +208,15 @@ def _make_plugin_cls() -> type:
     BasePlugin = _load_base_plugin()
 
     class _SaferAdkPlugin(BasePlugin):  # type: ignore[misc, valid-type]
-        """BasePlugin implementation that forwards ADK's 13 callbacks
-        into SAFER's 9-hook event model."""
+        """BasePlugin implementation that forwards ADK's 12 callbacks
+        into SAFER's 9-hook event model.
+
+        Session boundary: each `Runner.run_async()` call produces one ADK
+        invocation with its own `invocation_id` (UUID).  We map one ADK
+        invocation to one SAFER session, so a runner that handles multiple
+        user messages produces multiple distinct SAFER sessions — even
+        though the same plugin instance handles them all.
+        """
 
         def __init__(
             self,
@@ -238,7 +230,11 @@ def _make_plugin_cls() -> type:
             super().__init__(name="safer")
             self.agent_id = agent_id
             self.agent_name = agent_name or agent_id
-            self.session_id = session_id or f"sess_{uuid.uuid4().hex[:16]}"
+            # `session_id` constructor arg pins the FIRST invocation only;
+            # subsequent invocations rotate to fresh UUIDs (see
+            # `_begin_invocation`).  None means "auto-generate per invocation".
+            self._initial_session_id = session_id
+            self._current_session_id: str | None = None
             self._client = client
             self._session_started = False
             self._sequence = 0
@@ -249,6 +245,40 @@ def _make_plugin_cls() -> type:
             self._profile_synced = False
 
         # internal plumbing ----------------------------------------
+
+        @property
+        def session_id(self) -> str:
+            """Current SAFER session id.  Rotates per ADK invocation.
+
+            If no invocation is active yet, returns the constructor-supplied
+            id (or auto-generates one).  This means tests that read
+            `plugin.session_id` before any callback fires still get a stable
+            value, while real runs always carry the per-invocation id."""
+            if self._current_session_id is None:
+                self._current_session_id = (
+                    self._initial_session_id or f"sess_{uuid.uuid4().hex[:16]}"
+                )
+            return self._current_session_id
+
+        def _begin_invocation(self, invocation_id: str | None = None) -> None:
+            """Start a fresh SAFER session for a new ADK invocation.
+
+            Called from `before_run_callback`.  Each `Runner.run_async()`
+            call produces a new `invocation_id`; we map one ADK invocation
+            to one SAFER session so that a runner serving multiple user
+            messages produces distinct sessions on the dashboard."""
+            # Rotate session id (use the ADK invocation_id if provided so
+            # the SAFER and ADK ids correlate; otherwise auto-generate).
+            if invocation_id:
+                self._current_session_id = f"sess_{str(invocation_id)[:16]}"
+            else:
+                self._current_session_id = f"sess_{uuid.uuid4().hex[:16]}"
+            # Reset per-invocation state
+            self._session_started = False
+            self._sequence = 0
+            self._step_count = 0
+            self._model_start_ts.clear()
+            self._tool_start_ts.clear()
 
         def _get_client(self) -> SaferClient | None:
             return self._client or get_client()
@@ -335,8 +365,13 @@ def _make_plugin_cls() -> type:
 
         async def before_run_callback(self, *, invocation_context: Any) -> None:
             try:
-                context: dict[str, Any] = {}
                 inv_id = getattr(invocation_context, "invocation_id", None)
+                # Rotate to a fresh SAFER session for this invocation; if the
+                # plugin has been used for prior invocations, this is what
+                # prevents the multi-turn collision bug where every call
+                # writes to the same session_id.
+                self._begin_invocation(invocation_id=inv_id)
+                context: dict[str, Any] = {}
                 if inv_id:
                     context["invocation_id"] = str(inv_id)
                 self._ensure_session_started(context=context)
@@ -347,22 +382,13 @@ def _make_plugin_cls() -> type:
         async def before_agent_callback(
             self, *, agent: Any, callback_context: Any
         ) -> None:
+            # Observation-only: just ensure the session has started.  We do
+            # NOT emit `on_agent_decision` here — that would double-fire
+            # alongside `on_event_callback`'s tool-call decision and trigger
+            # the Multi-Persona Judge twice per turn.  The model's actual
+            # decision (which tool to call) surfaces in `on_event_callback`.
             try:
                 self._ensure_session_started()
-                name = (
-                    getattr(agent, "name", None)
-                    or getattr(callback_context, "agent_name", None)
-                    or self.agent_name
-                )
-                self._emit(
-                    OnAgentDecisionPayload(
-                        session_id=self.session_id,
-                        agent_id=self.agent_id,
-                        sequence=self._next_sequence(),
-                        decision_type="agent_turn_start",
-                        chosen_action=str(name) if name else None,
-                    )
-                )
             except Exception as e:
                 self._emit_error(e, "before_agent")
             return None

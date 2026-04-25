@@ -26,6 +26,26 @@ def recording_client(monkeypatch):
                 }
             )
 
+        def emit(self, event):
+            """Record events from adapters that go through `client.emit()`
+            rather than `client.track_event()` (e.g. claude_sdk, openai_client)."""
+            payload = event.model_dump(mode="json") if hasattr(event, "model_dump") else event
+            hook_val = event.hook if hasattr(event, "hook") else payload.get("hook")
+            calls.append(
+                {
+                    "hook": hook_val.value if hasattr(hook_val, "value") else str(hook_val),
+                    "payload": payload,
+                    "session_id": payload.get("session_id"),
+                    "agent_id": payload.get("agent_id"),
+                }
+            )
+
+        def next_sequence(self, session_id):
+            # Simple counter so adapter doesn't fall back to internal counter
+            n = getattr(self, "_seq_counter", 0)
+            self._seq_counter = n + 1
+            return n
+
     from safer import client as client_mod
 
     monkeypatch.setattr(client_mod, "_client", _Dummy(), raising=False)

@@ -30,10 +30,18 @@ import subprocess
 import sys
 from pathlib import Path
 
+from strands import tool
+
 logging.basicConfig(level=logging.INFO)
 
 
 # ---------- real tools (no mock state) ----------
+#
+# Each tool is decorated with `@tool` from strands so the agent's tool
+# registry actually picks them up.  Without the decorator Strands logs
+# `unrecognized tool specification` and silently drops the function —
+# the agent then runs with zero tools, which is what the previous
+# version of this example silently did.
 
 
 def _ps_command(top_n: int) -> list[str]:
@@ -44,6 +52,7 @@ def _ps_command(top_n: int) -> list[str]:
     return ["ps", "aux", "--sort=-%cpu"]
 
 
+@tool
 def list_processes(top_n: int = 15) -> str:
     """List the top-N processes by CPU usage (real `ps` output)."""
     try:
@@ -60,6 +69,7 @@ def list_processes(top_n: int = 15) -> str:
     return "\n".join(lines[: top_n + 1])
 
 
+@tool
 def disk_usage() -> str:
     """Return real `df -h` output."""
     try:
@@ -82,6 +92,7 @@ def _log_whitelist() -> list[Path]:
     return [Path(p) for p in candidates]
 
 
+@tool
 def read_log_tail(path: str, lines: int = 100) -> str:
     """Read the last N lines of a whitelisted log file.
 
@@ -100,6 +111,7 @@ def read_log_tail(path: str, lines: int = 100) -> str:
         return f"error: {e}"
 
 
+@tool
 def run_shell(cmd: str) -> str:
     """Execute a shell command on the host.
 

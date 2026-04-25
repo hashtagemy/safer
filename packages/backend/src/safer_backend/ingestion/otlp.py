@@ -55,6 +55,7 @@ from opentelemetry.proto.common.v1.common_pb2 import AnyValue, KeyValue
 from opentelemetry.proto.trace.v1.trace_pb2 import Span as PbSpan
 from opentelemetry.proto.trace.v1.trace_pb2 import Status as PbStatus
 
+from safer._pricing import estimate_cost
 from safer.events import (
     AfterLLMCallPayload,
     AfterToolUsePayload,
@@ -62,6 +63,7 @@ from safer.events import (
     BeforeToolUsePayload,
     Event,
     Hook,
+    OnAgentDecisionPayload,
     OnErrorPayload,
     OnFinalOutputPayload,
     OnSessionEndPayload,
@@ -214,6 +216,10 @@ _OUTPUT_TOKEN_KEYS = (
 _CACHED_TOKEN_KEYS = (
     "gen_ai.usage.cached_input_tokens",
     "gen_ai.usage.cache_read_input_tokens",
+    # Newer GenAI semconv (1.36+) and OpenLLMetry forks use these too:
+    "gen_ai.usage.cache_read_tokens",
+    "gen_ai.prompt_cache.cached_input_tokens",
+    "llm.usage.cache_read_input_tokens",
 )
 
 
@@ -420,6 +426,10 @@ def map_genai_span_to_safer(
         cached = _first_int(span.attributes, _CACHED_TOKEN_KEYS)
         prompt = _extract_user_prompt(span)
         response = _extract_assistant_text(span)
+        # Cost enrichment via the shared pricing table — earlier versions
+        # left this hardcoded at $0, so OTel-bridge sessions had no cost
+        # data on the dashboard.
+        cost = estimate_cost(model, tokens_in=tokens_in, tokens_out=tokens_out, cache_read=cached) or 0.0
         events.append(
             BeforeLLMCallPayload(
                 session_id=session_id,
@@ -441,11 +451,30 @@ def map_genai_span_to_safer(
                 tokens_in=tokens_in,
                 tokens_out=tokens_out,
                 cache_read_tokens=cached,
-                cost_usd=0.0,  # billing layer enriches via pricing table
+                cost_usd=cost,
                 latency_ms=span.duration_ms,
                 source="otlp",
             )
         )
+        # Best-effort tool_use synthesis — when the chat span carries a
+        # `gen_ai.tool.call.id` attribute (Anthropic instrumentor emits
+        # this on the parent span when the model returns a tool_use block),
+        # synthesize an on_agent_decision so SAFER's Multi-Persona Judge
+        # routes correctly even though the user's tool execution itself
+        # is not OTel-instrumented.
+        tc_id = span.attributes.get("gen_ai.tool.call.id")
+        tc_name = span.attributes.get("gen_ai.tool.call.name") or span.attributes.get("gen_ai.tool.name")
+        if isinstance(tc_id, str) and tc_id and isinstance(tc_name, str) and tc_name:
+            events.append(
+                OnAgentDecisionPayload(
+                    session_id=session_id,
+                    agent_id=agent_id,
+                    sequence=t.next_sequence(span.trace_id),
+                    decision_type="tool_call",
+                    chosen_action=tc_name,
+                    source="otlp",
+                )
+            )
 
     # 3. Tool call pair.
     if is_tool:
