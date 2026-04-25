@@ -1,17 +1,65 @@
 [project]
 name = "safer-sdk"
 version = "0.1.0"
-description = "SAFER SDK — instrument any AI agent framework with one line"
+description = "SAFER SDK — instrument any AI agent framework with one line. Hooks for Claude SDK, OpenAI, OpenAI Agents, LangChain, Google ADK, AWS Strands, AWS Bedrock, and CrewAI."
 readme = "README.md"
 requires-python = ">=3.11"
 license = "Apache-2.0"
-authors = [{ name = "SAFER Contributors" }]
+authors = [
+    { name = "Mert Ozbas", email = "mertozbas@gmail.com" },
+    { name = "SAFER Contributors" },
+]
+maintainers = [
+    { name = "Mert Ozbas", email = "mertozbas@gmail.com" },
+]
+keywords = [
+    "ai",
+    "agents",
+    "agent-framework",
+    "observability",
+    "instrumentation",
+    "security",
+    "llm",
+    "claude",
+    "anthropic",
+    "openai",
+    "langchain",
+    "strands",
+    "google-adk",
+    "bedrock",
+    "crewai",
+    "hooks",
+    "tracing",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Information Technology",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: System :: Monitoring",
+    "Topic :: Security",
+    "Typing :: Typed",
+]
 dependencies = [
     "pydantic>=2.5",
     "httpx>=0.27",
     "websockets>=12.0",
     "anyio>=4.3",
 ]
+
+[project.urls]
+Homepage = "https://github.com/hashtagemy/safer"
+Documentation = "https://github.com/hashtagemy/safer#readme"
+Repository = "https://github.com/hashtagemy/safer"
+Issues = "https://github.com/hashtagemy/safer/issues"
+Changelog = "https://github.com/hashtagemy/safer/releases"
 
 [project.optional-dependencies]
 claude = ["anthropic>=0.40"]
