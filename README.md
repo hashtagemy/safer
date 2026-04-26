@@ -188,12 +188,15 @@ SAFER repo checkout required.
 pip install safer-sdk
 
 # Or with the framework adapter you actually use
-pip install 'safer-sdk[strands]'
-pip install 'safer-sdk[langchain]'
-pip install 'safer-sdk[google-adk]'
-pip install 'safer-sdk[openai]'
-pip install 'safer-sdk[claude]'
-pip install 'safer-sdk[all]'         # every adapter
+pip install 'safer-sdk[strands]'        # AWS Strands
+pip install 'safer-sdk[langchain]'      # LangChain / LangGraph
+pip install 'safer-sdk[google-adk]'     # Google ADK
+pip install 'safer-sdk[openai]'         # OpenAI raw SDK
+pip install 'safer-sdk[openai-agents]'  # OpenAI Agents SDK
+pip install 'safer-sdk[claude]'         # Anthropic raw SDK
+pip install 'safer-sdk[bedrock]'        # AWS Bedrock (boto3)
+pip install 'safer-sdk[crewai]'         # CrewAI
+pip install 'safer-sdk[all]'            # every adapter
 ```
 
 Then a single line plugs SAFER into your existing framework:
