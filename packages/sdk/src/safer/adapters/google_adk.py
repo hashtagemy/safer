@@ -227,7 +227,7 @@ def _make_plugin_cls() -> type:
             client: SaferClient | None = None,
             pin_session: bool = False,
         ) -> None:
-            ensure_runtime(agent_id, agent_name)
+            ensure_runtime(agent_id, agent_name, framework="google-adk")
             super().__init__(name="safer")
             self.agent_id = agent_id
             self.agent_name = agent_name or agent_id

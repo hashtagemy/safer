@@ -132,6 +132,7 @@ def test_second_instrument_call_carries_detected_framework(
         "anthropic",
         "langchain",
         "openai",
+        "openai-agents",
         "google-adk",
         "strands",
         "otel-bridge",
@@ -161,6 +162,7 @@ def test_register_payload_carries_framework_and_prompt(
         "anthropic",
         "langchain",
         "openai",
+        "openai-agents",
         "google-adk",
         "strands",
         "otel-bridge",
@@ -187,6 +189,7 @@ def test_detects_google_adk_when_installed() -> None:
     # Framework-native detections win over raw-LLM SDKs, so when ADK is
     # installed the label must be at least in the detected set.
     assert label in {
+        "openai-agents",
         "langchain",
         "google-adk",
         "strands",
@@ -206,6 +209,7 @@ def test_detects_strands_when_installed() -> None:
 
     label = _register_adapters(_DummyClient())
     assert label in {
+        "openai-agents",
         "langchain",
         "google-adk",
         "strands",
@@ -230,6 +234,7 @@ def test_otel_only_environment_returns_otel_bridge_label(
         hidden = {
             "anthropic",
             "openai",
+            "agents",
             "langchain",
             "google.adk",
             "strands",

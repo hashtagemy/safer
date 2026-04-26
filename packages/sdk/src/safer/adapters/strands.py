@@ -286,7 +286,7 @@ def _make_provider_cls() -> type:
             client: SaferClient | None = None,
             pin_session: bool = False,
         ) -> None:
-            ensure_runtime(agent_id, agent_name)
+            ensure_runtime(agent_id, agent_name, framework="strands")
             self.agent_id = agent_id
             self.agent_name = agent_name or agent_id
             # `_initial_session_id` pins the FIRST invocation only.  Every

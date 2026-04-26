@@ -476,7 +476,7 @@ class _HandlerMixin:
     ) -> None:
         from ._bootstrap import ensure_runtime
 
-        ensure_runtime(agent_id, agent_name)
+        ensure_runtime(agent_id, agent_name, framework="langchain")
         # NB: BaseCallbackHandler.__init__ takes no args, so `super().__init__()`
         # is a no-op; the subclass that mixes us in calls it via the type
         # MRO automatically when it's instantiated.  We don't call super here.

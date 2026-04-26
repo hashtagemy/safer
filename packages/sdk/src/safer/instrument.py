@@ -52,6 +52,7 @@ def instrument(
     include: list[str] | tuple[str, ...] | None = None,
     exclude: list[str] | tuple[str, ...] | None = None,
     auto_register: bool = True,
+    framework_hint: str | None = None,
     **extra_config: Any,
 ) -> SaferClient:
     """Initialize SAFER. Idempotent — subsequent calls return the same client.
@@ -121,8 +122,15 @@ def instrument(
     # Graceful shutdown at process exit.
     atexit.register(clear_client)
 
-    # Register framework adapters (best-effort, non-fatal).
-    framework = _register_adapters(client)
+    # Adapter-declared framework wins over environment detection — an
+    # environment with several frameworks installed (a single dev box
+    # running multiple demo agents) would otherwise tag every new
+    # agent with whichever package happens to be first in the
+    # detection order.
+    if framework_hint:
+        framework = framework_hint
+    else:
+        framework = _register_adapters(client)
     _detected_framework = framework
 
     # Onboarding hook — fires once per process per agent_id.
@@ -199,6 +207,7 @@ def _register_adapters(client: SaferClient) -> str:
     # Framework-native first — these imply a native hook adapter is in
     # the picture (SaferCallbackHandler, SaferAdkPlugin, SaferHookProvider).
     for label, module in (
+        ("openai-agents", "agents"),
         ("langchain", "langchain"),
         ("google-adk", "google.adk"),
         ("strands", "strands"),

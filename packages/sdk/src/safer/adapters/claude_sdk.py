@@ -105,7 +105,7 @@ class _AnthropicEventEmitter:
     ) -> None:
         from ._bootstrap import ensure_runtime
 
-        ensure_runtime(agent_id, agent_name)
+        ensure_runtime(agent_id, agent_name, framework="anthropic")
         self.agent_id = agent_id
         self.agent_name = agent_name or agent_id
         self._initial_session_id = session_id

@@ -156,7 +156,7 @@ def configure_otel_bridge(
     """
     global _BRIDGE_CONFIGURED
 
-    ensure_runtime(agent_id, agent_name)
+    ensure_runtime(agent_id, agent_name, framework="otel-bridge")
 
     trace, OTLPSpanExporter, TracerProvider, BatchSpanProcessor = (
         _import_otel_core()

@@ -21,19 +21,33 @@ from __future__ import annotations
 from ..client import get_client
 
 
-def ensure_runtime(agent_id: str, agent_name: str | None = None) -> None:
+def ensure_runtime(
+    agent_id: str,
+    agent_name: str | None = None,
+    *,
+    framework: str | None = None,
+) -> None:
     """Start the SAFER runtime if it isn't running yet.
 
     No-op when `get_client()` already returns a live client. The import
     of `instrument` is deferred so that unit tests can install a dummy
     client via `monkeypatch.setattr(client_mod, "_client", ...)` without
     pulling in the instrument module.
+
+    `framework` is the adapter's self-declared framework label (e.g.
+    `"google-adk"`, `"openai-agents"`). When set it overrides runtime
+    module detection so an environment with multiple frameworks
+    installed still labels each agent correctly.
     """
     if get_client() is not None:
         return
     from ..instrument import instrument
 
-    instrument(agent_id=agent_id, agent_name=agent_name)
+    instrument(
+        agent_id=agent_id,
+        agent_name=agent_name,
+        framework_hint=framework,
+    )
 
 
 __all__ = ["ensure_runtime"]
