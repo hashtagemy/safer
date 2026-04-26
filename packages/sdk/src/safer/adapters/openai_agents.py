@@ -205,6 +205,14 @@ def _tool_call_id(context: Any) -> str | None:
 # ---------- emitter ---------------------------------------------------------
 
 
+# agent_id → most recently constructed _AgentsEmitter. Looked up by
+# `SaferTracingProcessor` so guardrail / MCP errors emitted from the
+# tracing channel land in the same SAFER session as the rest of the
+# run hooks lifecycle, instead of opening a new orphan session that
+# would never receive an `on_session_end`.
+_ACTIVE_EMITTERS: dict[str, "_AgentsEmitter"] = {}
+
+
 class _AgentsEmitter:
     """Holds session state and emits SAFER events for one
     `SaferRunHooks` instance.  The hooks themselves are stateless — all
@@ -225,6 +233,10 @@ class _AgentsEmitter:
         ensure_runtime(agent_id, agent_name, framework="openai-agents")
         self.agent_id = agent_id
         self.agent_name = agent_name or agent_id
+        # Register so SaferTracingProcessor can route guardrail / MCP
+        # errors into this emitter's active session instead of inventing
+        # a synthetic `trace_xxx` session that would never get closed.
+        _ACTIVE_EMITTERS[agent_id] = self
         self._initial_session_id = session_id
         self._current_session_id: str | None = None
         self._safer = safer_client
@@ -679,12 +691,24 @@ def _build_tracing_processor_class() -> type:
             if error:
                 # Surface guardrail trips, MCP errors, etc.  RunHooks doesn't
                 # expose these so the trace processor is the only signal.
+                # Route the error into the live SaferRunHooks emitter for
+                # this agent_id — that way the error event lands in the
+                # same SAFER session as the rest of the lifecycle and we
+                # don't spawn a new orphan `trace_xxx` session.
+                emitter = _ACTIVE_EMITTERS.get(self._agent_id)
+                if emitter is None:
+                    log.warning(
+                        "SAFER: tracing processor saw an error for agent "
+                        "%r before any SaferRunHooks instance was active; "
+                        "dropping (no session to attach it to)",
+                        self._agent_id,
+                    )
+                    return
                 self._emit(
                     OnErrorPayload(
-                        session_id=getattr(span, "trace_id", "otel_span")[:32]
-                        or "trace_unknown",
+                        session_id=emitter.session_id,
                         agent_id=self._agent_id,
-                        sequence=0,  # span ordering is provided by the SDK; no SAFER counter needed
+                        sequence=emitter._next_seq(),
                         error_type=f"{cls_name}_error",
                         message=str(error)[:2000],
                         source="adapter:openai_agents:trace",
@@ -789,6 +813,7 @@ def _reset_for_tests() -> None:
     _CACHED_HOOKS_CLASS = None
     _CACHED_PROCESSOR_CLASS = None
     _REGISTERED_PROCESSORS.clear()
+    _ACTIVE_EMITTERS.clear()
 
 
 __all__ = [

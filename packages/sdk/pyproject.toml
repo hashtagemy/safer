@@ -1,6 +1,6 @@
 [project]
 name = "safer-sdk"
-version = "0.1.3"
+version = "0.1.4"
 description = "SAFER SDK — instrument any AI agent framework with one line. Hooks for Claude SDK, OpenAI, OpenAI Agents, LangChain, Google ADK, AWS Strands, AWS Bedrock, and CrewAI."
 readme = "README.md"
 requires-python = ">=3.11"
