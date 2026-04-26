@@ -348,7 +348,9 @@ def test_api_compile_then_activate_then_list_then_delete(app_client):
         json={"compiled": compiled, "agent_id": None},
     )
     assert resp.status_code == 200
-    active = resp.json()
+    body = resp.json()
+    assert len(body["policies"]) == 1
+    active = body["policies"][0]
     assert active["active"] is True
     policy_id = active["policy_id"]
 

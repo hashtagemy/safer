@@ -38,6 +38,12 @@ interface PolicyListResponse {
   policies: ActivePolicy[];
 }
 
+interface AgentSummary {
+  agent_id: string;
+  name: string;
+  framework: string | null;
+}
+
 const severityVariant: Record<Severity, Variant> = {
   LOW: "success",
   MEDIUM: "ice",
@@ -60,6 +66,9 @@ export default function Policies() {
   const [compileError, setCompileError] = useState<string | null>(null);
   const [compiled, setCompiled] = useState<CompiledPolicy | null>(null);
 
+  const [agents, setAgents] = useState<AgentSummary[]>([]);
+  const [selectedAgentIds, setSelectedAgentIds] = useState<string[]>([]);
+
   const [activating, setActivating] = useState(false);
   const [activateError, setActivateError] = useState<string | null>(null);
   const [flash, setFlash] = useState<string | null>(null);
@@ -75,9 +84,27 @@ export default function Policies() {
     }
   }, []);
 
+  const loadAgents = useCallback(async () => {
+    try {
+      const r = await fetchJSON<AgentSummary[]>("/v1/agents");
+      setAgents(r);
+    } catch {
+      setAgents([]);
+    }
+  }, []);
+
   useEffect(() => {
     loadPolicies();
-  }, [loadPolicies]);
+    loadAgents();
+  }, [loadPolicies, loadAgents]);
+
+  const toggleAgent = (agentId: string) => {
+    setSelectedAgentIds((prev) =>
+      prev.includes(agentId)
+        ? prev.filter((a) => a !== agentId)
+        : [...prev, agentId]
+    );
+  };
 
   const compile = async () => {
     if (!nlText.trim()) return;
@@ -88,7 +115,12 @@ export default function Policies() {
       const r = await fetch(`${BACKEND_URL}/v1/policies/compile`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ nl_text: nlText.trim() }),
+        body: JSON.stringify({
+          nl_text: nlText.trim(),
+          // Hand the compiler the first selected agent's tool surface
+          // so it binds to real argument names instead of guessing.
+          agent_id: selectedAgentIds[0] ?? null,
+        }),
       });
       if (!r.ok) {
         const body = await r.text();
@@ -111,15 +143,24 @@ export default function Policies() {
       const r = await fetch(`${BACKEND_URL}/v1/policies/activate`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ compiled, agent_id: null }),
+        body: JSON.stringify({
+          compiled,
+          agent_ids: selectedAgentIds,
+        }),
       });
       if (!r.ok) {
         const body = await r.text();
         throw new Error(`${r.status}: ${body.slice(0, 300)}`);
       }
-      setFlash(`Activated "${compiled.name}"`);
+      const targetCount = selectedAgentIds.length || 1;
+      const targetLabel =
+        selectedAgentIds.length === 0
+          ? "globally"
+          : `on ${targetCount} agent${targetCount === 1 ? "" : "s"}`;
+      setFlash(`Activated "${compiled.name}" ${targetLabel}`);
       setCompiled(null);
       setNlText("");
+      setSelectedAgentIds([]);
       await loadPolicies();
       window.setTimeout(() => setFlash(null), 3000);
     } catch (e) {
@@ -174,6 +215,9 @@ export default function Policies() {
           compiling={compiling}
           compileError={compileError}
           onCompile={compile}
+          agents={agents}
+          selectedAgentIds={selectedAgentIds}
+          onToggleAgent={toggleAgent}
         />
         <PreviewColumn
           compiled={compiled}
@@ -260,12 +304,18 @@ function ComposeColumn({
   compiling,
   compileError,
   onCompile,
+  agents,
+  selectedAgentIds,
+  onToggleAgent,
 }: {
   nlText: string;
   setNlText: (v: string) => void;
   compiling: boolean;
   compileError: string | null;
   onCompile: () => void;
+  agents: AgentSummary[];
+  selectedAgentIds: string[];
+  onToggleAgent: (agentId: string) => void;
 }) {
   return (
     <Card className="h-full">
@@ -281,10 +331,60 @@ function ComposeColumn({
           value={nlText}
           onChange={(e) => setNlText(e.target.value)}
           placeholder="Describe a rule the agent must follow..."
-          rows={8}
+          rows={6}
           className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-safer-ice"
           disabled={compiling}
         />
+
+        <div className="space-y-2">
+          <div className="text-[11px] uppercase tracking-wider text-muted-foreground font-mono">
+            Apply to which agents?
+          </div>
+          {agents.length === 0 ? (
+            <p className="text-xs text-muted-foreground font-mono">
+              No agents registered yet — leave empty for a global policy.
+            </p>
+          ) : (
+            <div className="grid grid-cols-1 gap-1.5 max-h-48 overflow-auto pr-1">
+              {agents.map((a) => {
+                const checked = selectedAgentIds.includes(a.agent_id);
+                return (
+                  <label
+                    key={a.agent_id}
+                    className={`flex items-center gap-2 rounded-md border px-2.5 py-1.5 text-xs font-mono cursor-pointer transition ${
+                      checked
+                        ? "border-safer-ice bg-safer-ice/10"
+                        : "border-border hover:bg-muted/40"
+                    }`}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={() => onToggleAgent(a.agent_id)}
+                      className="accent-safer-ice"
+                      disabled={compiling}
+                    />
+                    <span className="truncate flex-1">{a.name}</span>
+                    {a.framework && (
+                      <Badge variant="outline">{a.framework}</Badge>
+                    )}
+                  </label>
+                );
+              })}
+            </div>
+          )}
+          <p className="text-[11px] text-muted-foreground font-mono">
+            {selectedAgentIds.length === 0
+              ? "Empty selection → global policy (applies to every agent)."
+              : `Compiler will use "${
+                  agents.find((a) => a.agent_id === selectedAgentIds[0])
+                    ?.name ?? selectedAgentIds[0]
+                }" for context; Activate creates ${selectedAgentIds.length} policy row${
+                  selectedAgentIds.length === 1 ? "" : "s"
+                }.`}
+          </p>
+        </div>
+
         <button
           onClick={onCompile}
           disabled={compiling || !nlText.trim()}

@@ -29,6 +29,7 @@ except ImportError:  # pragma: no cover — hard dep
 from ..judge.cost_tracker import record_claude_call
 from ..judge.personas import FLAG_VOCABULARY_HINT
 from ..models.policies import CompiledPolicy
+from ..storage.db import get_db
 
 log = logging.getLogger("safer.policy_studio.compiler")
 
@@ -299,6 +300,87 @@ def _estimate_cost(
     ) / 1_000_000
 
 
+async def _agent_context_block(agent_id: str) -> str:
+    """Return a markdown context block describing the agent's tool surface.
+
+    Keeps the compiler grounded in the *actual* tool names + argument
+    keys the agent uses, instead of forcing the user to spell them
+    out in their natural-language policy text. Returns "" when the
+    agent has no row or no observed tool calls — the compile then
+    falls back to its tool-agnostic behaviour.
+    """
+    try:
+        async with get_db() as db:
+            async with db.execute(
+                "SELECT name, framework, system_prompt FROM agents WHERE agent_id = ?",
+                (agent_id,),
+            ) as cur:
+                meta = await cur.fetchone()
+            if meta is None:
+                return ""
+            async with db.execute(
+                """
+                SELECT payload_json FROM events
+                WHERE agent_id = ? AND hook = 'before_tool_use'
+                ORDER BY rowid DESC LIMIT 200
+                """,
+                (agent_id,),
+            ) as cur:
+                rows = await cur.fetchall()
+    except Exception as e:  # pragma: no cover — defensive
+        log.debug("agent context fetch failed for %s: %s", agent_id, e)
+        return ""
+
+    tool_args: dict[str, set[str]] = {}
+    for (payload_json,) in rows:
+        try:
+            payload = json.loads(payload_json or "{}")
+        except json.JSONDecodeError:
+            continue
+        tool = payload.get("tool_name") or payload.get("tool")
+        if not tool:
+            continue
+        args = payload.get("args") or payload.get("arguments") or {}
+        if isinstance(args, dict):
+            tool_args.setdefault(tool, set()).update(args.keys())
+
+    if not tool_args:
+        return ""
+
+    name, framework, system_prompt = meta
+    short_prompt = (
+        (system_prompt or "").strip().replace("\n", " ")[:280]
+        if system_prompt
+        else ""
+    )
+
+    tool_lines = []
+    for tool in sorted(tool_args):
+        keys = sorted(tool_args[tool])
+        tool_lines.append(f"  - `{tool}` accepts: {', '.join(keys)}")
+
+    parts = [
+        "",
+        "## Target agent context",
+        f"Agent name: {name}",
+        f"Framework: {framework or 'unknown'}",
+    ]
+    if short_prompt:
+        parts.append(f"System prompt summary: {short_prompt}")
+    parts.append(
+        "Observed tools and the argument keys the agent has actually used:"
+    )
+    parts.extend(tool_lines)
+    parts.append(
+        "When the user's policy refers to a tool field, prefer these exact "
+        "argument names over guesses (e.g. `email`, `recipient`, `address`). "
+        "If the user says \"the email it sends to\" and the tool's argument "
+        "is named `email`, generate code that reads `args.get('email')`."
+    )
+    parts.append("")
+    return "\n".join(parts)
+
+
 async def _repair_to_json(client: Any, bad_text: str) -> str:
     repair_prompt = (
         "The previous output was not valid JSON. Re-emit the same compiled "
@@ -316,10 +398,23 @@ async def _repair_to_json(client: Any, bad_text: str) -> str:
 # ---------- public API ----------
 
 
-async def compile_policy(nl_text: str) -> CompiledPolicy:
+async def compile_policy(
+    nl_text: str,
+    *,
+    agent_id: str | None = None,
+) -> CompiledPolicy:
     """Compile a natural-language policy into a `CompiledPolicy`.
 
     Raises RuntimeError if no Anthropic client is configured.
+
+    When `agent_id` is provided, the compiler also receives a short
+    summary of the agent's actual tool surface (tool names + observed
+    argument keys from recent `before_tool_use` events). Without that
+    context Sonnet has to guess argument names — common ones like `to`,
+    `recipient`, etc. — which silently fails when the agent's tool
+    actually uses something else (e.g. `email`). The agent context lets
+    the compiler bind the rule to the agent's real schema and makes the
+    natural-language pitch actually deliver.
     """
     nl_text = nl_text.strip()
     if not nl_text:
@@ -331,9 +426,14 @@ async def compile_policy(nl_text: str) -> CompiledPolicy:
             "ANTHROPIC_API_KEY is not set; policy compiler cannot run."
         )
 
+    agent_context_block = ""
+    if agent_id:
+        agent_context_block = await _agent_context_block(agent_id)
+
     user_message = (
         "Compile the following user policy into the JSON schema above.\n"
-        "Echo the user's text verbatim in `nl_text`.\n\n"
+        "Echo the user's text verbatim in `nl_text`.\n"
+        f"{agent_context_block}\n"
         f"User policy:\n\"\"\"\n{nl_text}\n\"\"\""
     )
 
