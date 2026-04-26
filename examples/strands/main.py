@@ -240,6 +240,7 @@ def build_agent():
 
     model = AnthropicModel(
         model_id="claude-opus-4-7",
+        max_tokens=1024,
         client_args={"api_key": os.environ["ANTHROPIC_API_KEY"]},
     )
 
