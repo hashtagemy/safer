@@ -1,12 +1,18 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { ArrowLeft } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/Card";
 import { Badge, HookBadge, RiskBadge } from "@/components/ui/Badge";
 import { PersonaDrawer } from "@/components/PersonaDrawer";
 import { BlockMomentToast } from "@/components/BlockMomentToast";
+import { fetchJSON } from "@/lib/api";
 import { useSaferRealtime, type BlockMsg, type SaferEvent } from "@/lib/ws";
 import { cn } from "@/lib/utils";
+
+interface SessionEventsResponse {
+  session_id: string;
+  events: Array<Omit<SaferEvent, "type" | "gateway">>;
+}
 
 export default function LiveSession() {
   const { sessionId: raw } = useParams<{ sessionId: string }>();
@@ -16,11 +22,47 @@ export default function LiveSession() {
 
   const [selected, setSelected] = useState<SaferEvent | null>(null);
   const [toastKey, setToastKey] = useState(0);
+  const [historical, setHistorical] = useState<SaferEvent[]>([]);
+  const [historyLoaded, setHistoryLoaded] = useState(false);
 
-  const sessionEvents = useMemo(
-    () => events.filter((e) => e.session_id === sessionId),
-    [events, sessionId]
-  );
+  // Fetch any events that landed before this page mounted (the
+  // websocket buffer only carries events delivered after subscribe).
+  useEffect(() => {
+    if (!sessionId) return;
+    let cancelled = false;
+    setHistoryLoaded(false);
+    setHistorical([]);
+    fetchJSON<SessionEventsResponse>(
+      `/v1/sessions/${encodeURIComponent(sessionId)}/events`
+    )
+      .then((res) => {
+        if (cancelled) return;
+        const past: SaferEvent[] = res.events.map((e) => ({
+          ...e,
+          type: "event" as const,
+        }));
+        setHistorical(past);
+        setHistoryLoaded(true);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setHistoryLoaded(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [sessionId]);
+
+  const sessionEvents = useMemo(() => {
+    const live = events.filter((e) => e.session_id === sessionId);
+    const seen = new Set(live.map((e) => e.event_id));
+    const merged = [
+      ...historical.filter((e) => !seen.has(e.event_id)),
+      ...live,
+    ];
+    merged.sort((a, b) => a.sequence - b.sequence);
+    return merged;
+  }, [events, historical, sessionId]);
   const reversed = useMemo(
     () => [...sessionEvents].reverse(),
     [sessionEvents]
@@ -81,7 +123,11 @@ export default function LiveSession() {
 
         <Card className="flex-1 overflow-hidden">
           <CardContent className="p-0 h-full overflow-auto">
-            {reversed.length === 0 ? (
+            {!historyLoaded ? (
+              <div className="p-8 text-center text-sm text-muted-foreground font-mono">
+                Loading session events…
+              </div>
+            ) : reversed.length === 0 ? (
               <div className="p-8 text-center text-sm text-muted-foreground font-mono">
                 Waiting for events on this session…
               </div>
