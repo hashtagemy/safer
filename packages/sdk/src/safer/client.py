@@ -27,25 +27,30 @@ class SaferClient:
         self._sequence: dict[str, int] = {}  # session_id → counter
         self._lock = threading.Lock()
         self._loop: asyncio.AbstractEventLoop | None = None
+        self._thread: threading.Thread | None = None
         self._started = False
 
     # ---------- public ----------
 
     def start(self) -> None:
-        """Idempotent. Spawns a background event loop thread if none exists."""
+        """Idempotent. Always spawns a dedicated background event-loop thread.
+
+        We deliberately do NOT piggyback on a caller's already-running
+        asyncio loop (e.g. the one `asyncio.run(...)` opens for an ADK
+        agent): when that outer loop closes, atexit fires while our
+        transport's loop reference is dead and we cannot drain
+        `on_session_end` to the backend. A dedicated thread keeps the
+        loop alive long enough for `client.stop()` (registered as an
+        atexit handler) to flush the queue. Thread is daemon so a stray
+        client never holds the interpreter open past atexit.
+        """
         if self._started:
             return
-        try:
-            self._loop = asyncio.get_running_loop()
-            # Running loop exists → schedule on it.
-            self._loop.create_task(self.transport.start())
-        except RuntimeError:
-            # No running loop → create one in a background thread.
-            self._loop = asyncio.new_event_loop()
-            t = threading.Thread(
-                target=self._run_loop, name="safer-loop", daemon=True
-            )
-            t.start()
+        self._loop = asyncio.new_event_loop()
+        self._thread = threading.Thread(
+            target=self._run_loop, name="safer-loop", daemon=True
+        )
+        self._thread.start()
         self._started = True
         log.info("SAFER started (guard_mode=%s, url=%s)", self.config.guard_mode, self.config.api_url)
 
@@ -59,14 +64,31 @@ class SaferClient:
             self._loop.close()
 
     def stop(self) -> None:
-        """Graceful flush. Blocks up to shutdown_timeout_s."""
+        """Graceful flush. Atexit-safe.
+
+        First runs a synchronous, stdlib-only drain so the queue is
+        emptied even if interpreter shutdown is mid-flight (when httpx
+        cannot register its own atexit hooks). Then asks the async
+        worker to stop on a best-effort basis — it may or may not get
+        the message depending on how far along the daemon thread is.
+        """
         if not self._started or self._loop is None:
             return
-        future = asyncio.run_coroutine_threadsafe(self.transport.stop(), self._loop)
+        # 1. Sync drain — runs no third-party code that might call
+        #    atexit.register(), so it survives interpreter shutdown.
         try:
+            self.transport.sync_drain()
+        except Exception as e:  # pragma: no cover
+            log.warning("SAFER sync drain error: %s", e)
+        # 2. Best-effort async stop. If the loop is already torn down
+        #    (e.g. asyncio.run() exited), this fails silently.
+        try:
+            future = asyncio.run_coroutine_threadsafe(
+                self.transport.stop(), self._loop
+            )
             future.result(timeout=self.config.shutdown_timeout_s + 1.0)
         except Exception as e:  # pragma: no cover
-            log.warning("SAFER shutdown error: %s", e)
+            log.debug("SAFER async stop skipped: %s", e)
         self._started = False
 
     def emit(self, event: EventBase | dict[str, Any]) -> None:

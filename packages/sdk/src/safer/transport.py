@@ -95,6 +95,49 @@ class AsyncTransport:
     def dropped_count(self) -> int:
         return self._dropped
 
+    # ---------- atexit-safe sync drain ----------
+
+    def sync_drain(self) -> None:
+        """Best-effort synchronous flush of any queued events.
+
+        Called at atexit time, when the Python interpreter is in the
+        middle of shutdown and the async loop is no longer safe to
+        drive. Goes straight to `urllib.request` (stdlib) so we don't
+        rely on httpx — which tries to register its own atexit hooks
+        and triggers `RuntimeError: can't register atexit after
+        shutdown` once interpreter shutdown has begun.
+        """
+        import json as _json
+        import urllib.error
+        import urllib.request
+
+        pending: list[dict[str, Any]] = []
+        while not self._queue.empty():
+            try:
+                pending.append(self._queue.get_nowait())
+            except asyncio.QueueEmpty:  # pragma: no cover — race
+                break
+        if not pending:
+            return
+
+        url = f"{self.config.api_url.rstrip('/')}/v1/events"
+        headers = {"Content-Type": "application/json"}
+        if self.config.api_key:
+            headers["Authorization"] = f"Bearer {self.config.api_key}"
+        body = _json.dumps({"events": pending}).encode("utf-8")
+        req = urllib.request.Request(
+            url, data=body, headers=headers, method="POST"
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=3.0):
+                pass
+        except (urllib.error.URLError, OSError, Exception) as e:
+            log.warning(
+                "SAFER: sync drain failed: %s (dropping %d events)",
+                e,
+                len(pending),
+            )
+
     # ---------- internal ----------
 
     async def _run(self) -> None:

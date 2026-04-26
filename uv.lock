@@ -4370,7 +4370,7 @@ wheels = [
 
 [[package]]
 name = "safer-backend"
-version = "0.1.1"
+version = "0.1.2"
 source = { editable = "packages/backend" }
 dependencies = [
     { name = "aiosqlite" },
@@ -4422,7 +4422,7 @@ provides-extras = ["dev"]
 
 [[package]]
 name = "safer-sdk"
-version = "0.1.1"
+version = "0.1.2"
 source = { editable = "packages/sdk" }
 dependencies = [
     { name = "anyio" },
