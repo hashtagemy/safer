@@ -57,6 +57,8 @@ from ..events import (
     OnSessionEndPayload,
     OnSessionStartPayload,
 )
+from ..exceptions import SaferBlocked
+from ..gateway_check import check_or_raise
 from ._bootstrap import ensure_runtime
 
 log = logging.getLogger("safer.adapters.strands")
@@ -633,6 +635,8 @@ def _make_provider_cls() -> type:
                 self._emit_error(e, "after_model_call")
 
         def _on_before_tool_call(self, event: Any) -> None:
+            tool_name: str = "tool"
+            tool_input: dict[str, Any] = {}
             try:
                 self._ensure_session_started()
                 tool_use = getattr(event, "tool_use", None)
@@ -663,6 +667,31 @@ def _make_provider_cls() -> type:
                 )
             except Exception as e:
                 self._emit_error(e, "before_tool_call")
+
+            # Synchronous gateway check — runs AFTER the event emit so
+            # the dashboard sees the attempted call even when blocked.
+            # We use Strands' `cancel_tool` field (per
+            # `BeforeToolCallEvent` contract) instead of raising: a raw
+            # exception leaves the tool_use without a matching
+            # tool_result, which the next LLM turn rejects with a 400.
+            # `cancel_tool` makes Strands synthesize an error tool_result
+            # so the conversation stays consistent and the assistant can
+            # explain the block.
+            try:
+                check_or_raise(
+                    "before_tool_use",
+                    agent_id=self.agent_id,
+                    session_id=self.session_id,
+                    tool_name=str(tool_name),
+                    args=dict(tool_input),
+                )
+            except SaferBlocked as blocked:
+                try:
+                    event.cancel_tool = blocked.message  # type: ignore[attr-defined]
+                except Exception:  # pragma: no cover — older Strands
+                    raise
+            except Exception as e:  # pragma: no cover — helper already soft-fails
+                self._emit_error(e, "gateway_check")
 
         def _on_after_tool_call(self, event: Any) -> None:
             try:

@@ -136,6 +136,24 @@ def test_monitor_mode_never_blocks():
     assert d.decision == "warn"
 
 
+def test_monitor_mode_per_policy_enforce_still_blocks():
+    """Per-policy `guard_mode=enforce` blocks even when global mode is monitor.
+
+    A user who wrote "Block any X" in Policy Studio expects that policy
+    to actually block — independent of the operator's default mode.
+    """
+    enforce_hit = PolicyHit(
+        policy_id="p",
+        policy_name="p",
+        severity="HIGH",
+        flag="custom_block",
+        guard_mode="enforce",
+    )
+    d = apply_mode([enforce_hit], GuardMode.MONITOR)
+    assert d.is_block
+    assert d.risk == "HIGH"
+
+
 def test_intervene_blocks_on_escalation_flag():
     d = apply_mode([_hit("HIGH", "credential_leak")], GuardMode.INTERVENE)
     assert d.is_block

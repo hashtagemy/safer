@@ -5,12 +5,16 @@ returns a Decision: allow / warn / block. Combines PII scanning + policy
 evaluation + guard mode logic.
 
 Guard mode semantics:
-  monitor    — never blocks; logs warnings only
-  intervene  — block only if any hit is severity=CRITICAL or matches the
-               configured escalation flags (prompt_injection_*,
-               credential_leak, pii_sent_external, cross_tenant_data,
-               hipaa_phi_leak, data_exfiltration, eval_exec_usage,
-               shell_injection, policy_violation at CRITICAL)
+  monitor    — never blocks unless a hit carries `guard_mode="enforce"`;
+               otherwise logs warnings only. Per-policy enforce always
+               wins over global monitor — when the user wrote "Block any X"
+               in Policy Studio, that policy must block regardless of the
+               operator's default guard mode.
+  intervene  — block on per-policy enforce hits, on any hit with
+               severity=CRITICAL, or on hits whose flag is in the
+               escalation set (prompt_injection_*, credential_leak,
+               pii_sent_external, cross_tenant_data, hipaa_phi_leak,
+               data_exfiltration, eval_exec_usage, shell_injection)
   enforce    — block on any hit with severity>=HIGH
 """
 
@@ -84,21 +88,12 @@ def apply_mode(hits: list[PolicyHit], mode: GuardMode) -> Decision:
 
     risk = _max_risk(hits)
 
-    if mode == GuardMode.MONITOR:
-        # Global monitor mode trumps everything — never block.
-        return Decision(
-            decision="warn",
-            hits=hits,
-            reason="guard_mode=monitor: logged but not enforced",
-            risk=risk,
-        )
-
     # Per-hit `guard_mode="enforce"` (set by Sonnet when the user
     # writes "Block any X") makes the hit terminal regardless of the
-    # global mode. This is what makes a natural-language "Block any
-    # email_recipe call to gmail" rule actually block the call —
-    # without it, a HIGH severity hit with a custom flag would just
-    # warn under INTERVENE.
+    # global mode — including `monitor`. The user explicitly asked for
+    # a block in their policy text, so honoring that contract takes
+    # precedence over the operator's default mode. Non-enforce hits
+    # still defer to global mode below.
     enforce_hit = next(
         (h for h in hits if getattr(h, "guard_mode", "intervene") == "enforce"),
         None,
@@ -108,6 +103,14 @@ def apply_mode(hits: list[PolicyHit], mode: GuardMode) -> Decision:
             decision="block",
             hits=hits,
             reason=enforce_hit.recommended_mitigation or "policy violation",
+            risk=risk,
+        )
+
+    if mode == GuardMode.MONITOR:
+        return Decision(
+            decision="warn",
+            hits=hits,
+            reason="guard_mode=monitor: logged but not enforced",
             risk=risk,
         )
 

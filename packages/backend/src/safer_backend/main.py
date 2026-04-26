@@ -12,6 +12,7 @@ from .admin_api import router as admin_router
 from .agents_api import router as agents_router
 from .compliance.api import router as compliance_router
 from .config_api import router as config_router
+from .gateway.api import router as gateway_router
 from .ingestion.http import router as http_ingest_router
 from .ingestion.ws import router as ws_ingest_router
 from .inspector.api import router as inspector_router
@@ -62,6 +63,7 @@ app.include_router(sessions_router)
 app.include_router(redteam_router)
 app.include_router(compliance_router)
 app.include_router(config_router)
+app.include_router(gateway_router)
 app.include_router(system_router)
 app.include_router(admin_router)
 
