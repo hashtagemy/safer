@@ -36,6 +36,8 @@ import uuid
 from typing import Any, Iterable
 
 from ..client import SaferClient, get_client
+from ..exceptions import SaferBlocked
+from ..gateway_check import check_or_raise
 from ..events import (
     AfterLLMCallPayload,
     AfterToolUsePayload,
@@ -505,6 +507,22 @@ class _AgentsEmitter:
         )
         if call_id:
             self._pending_tool_calls[call_id] = (tool_name, time.monotonic())
+        # Synchronous gateway check. The Agents SDK turns a raised
+        # exception inside `on_tool_start` into a tool failure that
+        # the LLM can either retry around or surface to the user, so
+        # propagating SaferBlocked is the right cancellation signal.
+        try:
+            check_or_raise(
+                "before_tool_use",
+                agent_id=self.agent_id,
+                session_id=self.session_id,
+                tool_name=tool_name,
+                args=args if isinstance(args, dict) else {"value": args},
+            )
+        except SaferBlocked:
+            raise
+        except Exception as e:  # pragma: no cover — helper soft-fails
+            log.debug("gateway check failed (soft-allow): %s", e)
 
     def on_tool_end(self, agent: Any, tool: Any, result: Any, context: Any = None) -> None:
         tool_name = str(getattr(tool, "name", None) or "tool")

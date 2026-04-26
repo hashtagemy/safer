@@ -50,6 +50,8 @@ import uuid
 from typing import Any, Iterable
 
 from ..client import SaferClient, get_client
+from ..exceptions import SaferBlocked
+from ..gateway_check import check_or_raise
 from ..events import (
     AfterLLMCallPayload,
     AfterToolUsePayload,
@@ -618,6 +620,23 @@ class _OpenAIEmitter:
                 )
             )
             self._pending_tool_calls[call_id] = (name, args, time.monotonic())
+            # Synchronous gateway check on the auto-detected tool call.
+            # We're inside the response post-processor here — raising
+            # SaferBlocked propagates up to the user's tool-dispatch
+            # loop where they handle it the same way they would for the
+            # manual `before_tool_use(...)` helper below.
+            try:
+                check_or_raise(
+                    "before_tool_use",
+                    agent_id=self.agent_id,
+                    session_id=self.session_id,
+                    tool_name=name,
+                    args=args,
+                )
+            except SaferBlocked:
+                raise
+            except Exception as e:  # pragma: no cover — soft-fail
+                log.debug("gateway check failed (soft-allow): %s", e)
 
     def _emit_after_tool_use(self, call_id: str, tool_name: str, result: str) -> None:
         started = self._pending_tool_calls.pop(call_id, (tool_name, {}, time.monotonic()))[2]
@@ -661,16 +680,29 @@ class _OpenAIEmitter:
         )
 
     def before_tool_use(self, tool_name: str, args: dict[str, Any]) -> None:
+        args_dict = args or {}
         self._emit(
             BeforeToolUsePayload(
                 session_id=self.session_id,
                 agent_id=self.agent_id,
                 sequence=self._next_seq(),
                 tool_name=tool_name,
-                args=args or {},
+                args=args_dict,
                 source="adapter:openai",
             )
         )
+        try:
+            check_or_raise(
+                "before_tool_use",
+                agent_id=self.agent_id,
+                session_id=self.session_id,
+                tool_name=tool_name,
+                args=args_dict,
+            )
+        except SaferBlocked:
+            raise
+        except Exception as e:  # pragma: no cover — soft-fail
+            log.debug("gateway check failed (soft-allow): %s", e)
 
 
 # ---------- streaming accumulators -----------------------------------------

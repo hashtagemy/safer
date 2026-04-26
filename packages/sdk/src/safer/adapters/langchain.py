@@ -45,6 +45,8 @@ import uuid
 from typing import Any
 
 from ..client import SaferClient, get_client
+from ..exceptions import SaferBlocked
+from ..gateway_check import check_or_raise
 from ..events import (
     AfterLLMCallPayload,
     AfterToolUsePayload,
@@ -896,6 +898,24 @@ class _HandlerMixin:
                 args=args,
             )
         )
+        # Synchronous gateway check. LangChain's `on_tool_start`
+        # raising propagates straight up to the AgentExecutor, which
+        # turns the exception into a tool-execution error and lets the
+        # LLM either recover or surface the block to the user. We
+        # re-raise SaferBlocked so the executor's error message
+        # carries the policy reason verbatim.
+        try:
+            check_or_raise(
+                "before_tool_use",
+                agent_id=self.agent_id,
+                session_id=self.session_id,
+                tool_name=str(tool_name),
+                args=args,
+            )
+        except SaferBlocked:
+            raise
+        except Exception as e:  # pragma: no cover — helper soft-fails
+            log.debug("gateway check failed (soft-allow): %s", e)
 
     def on_tool_end(
         self, output: Any, *, run_id: Any | None = None, **kwargs: Any

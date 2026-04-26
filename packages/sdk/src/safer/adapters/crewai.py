@@ -47,6 +47,8 @@ import uuid
 from typing import Any
 
 from ..client import SaferClient, get_client
+from ..exceptions import SaferBlocked
+from ..gateway_check import check_or_raise
 from ..events import (
     AfterLLMCallPayload,
     AfterToolUsePayload,
@@ -422,6 +424,24 @@ def _build_listener_class() -> type:
                     )
                     key = _tool_key(event)
                     ev._tool_start_ts[key] = time.monotonic()
+                    # Synchronous gateway check. CrewAI listeners run on
+                    # its event bus; raising SaferBlocked propagates to
+                    # the bus dispatcher which surfaces it as a tool
+                    # error in the next CrewKickoff step.
+                    try:
+                        check_or_raise(
+                            "before_tool_use",
+                            agent_id=ev.agent_id,
+                            session_id=ev.session_id,
+                            tool_name=tool_name,
+                            args=tool_args,
+                        )
+                    except SaferBlocked:
+                        raise
+                    except Exception as e:  # pragma: no cover — soft-fail
+                        log.debug("gateway check failed (soft-allow): %s", e)
+                except SaferBlocked:
+                    raise
                 except Exception as e:  # pragma: no cover
                     log.debug("crew tool start emit failed: %s", e)
 

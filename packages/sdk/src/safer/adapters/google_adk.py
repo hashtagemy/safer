@@ -61,6 +61,8 @@ import uuid
 from typing import Any
 
 from ..client import SaferClient, get_client
+from ..exceptions import SaferBlocked
+from ..gateway_check import check_or_raise
 from ..events import (
     AfterLLMCallPayload,
     AfterToolUsePayload,
@@ -553,7 +555,7 @@ def _make_plugin_cls() -> type:
 
         async def before_tool_callback(
             self, *, tool: Any, tool_args: dict[str, Any], tool_context: Any
-        ) -> None:
+        ) -> dict[str, Any] | None:
             try:
                 self._ensure_session_started()
                 name = str(getattr(tool, "name", None) or "tool")
@@ -561,15 +563,34 @@ def _make_plugin_cls() -> type:
                     f"{name}:{getattr(tool_context, 'function_call_id', '') or uuid.uuid4()}"
                 )
                 self._tool_start_ts[key] = time.monotonic()
+                args_dict = dict(tool_args or {})
                 self._emit(
                     BeforeToolUsePayload(
                         session_id=self.session_id,
                         agent_id=self.agent_id,
                         sequence=self._next_sequence(),
                         tool_name=name,
-                        args=dict(tool_args or {}),
+                        args=args_dict,
                     )
                 )
+                # Synchronous gateway check. ADK semantics: returning a
+                # non-None dict from before_tool_callback short-circuits
+                # tool execution and surfaces our dict as the tool's
+                # result, so the assistant can explain the block.
+                try:
+                    check_or_raise(
+                        "before_tool_use",
+                        agent_id=self.agent_id,
+                        session_id=self.session_id,
+                        tool_name=name,
+                        args=args_dict,
+                    )
+                except SaferBlocked as blocked:
+                    return {
+                        "error": blocked.message or "blocked by SAFER policy",
+                        "blocked": True,
+                        "policy": "safer",
+                    }
             except Exception as e:
                 self._emit_error(e, "before_tool")
             return None

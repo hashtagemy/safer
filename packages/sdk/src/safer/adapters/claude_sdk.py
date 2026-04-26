@@ -50,6 +50,8 @@ from functools import cached_property
 from typing import Any
 
 from ..client import SaferClient, get_client
+from ..exceptions import SaferBlocked
+from ..gateway_check import check_or_raise
 from ..events import (
     AfterLLMCallPayload,
     AfterToolUsePayload,
@@ -418,17 +420,36 @@ class _AnthropicEventEmitter:
         args: dict[str, Any] | None = None,
         previous_context: str | None = None,
     ) -> None:
+        args_dict = args or {}
         self._emit(
             BeforeToolUsePayload(
                 session_id=self.session_id,
                 agent_id=self.agent_id,
                 sequence=self._next_seq(),
                 tool_name=tool_name,
-                args=args or {},
+                args=args_dict,
                 previous_context=previous_context,
                 source="adapter:claude_sdk",
             )
         )
+        # Synchronous gateway check. Raw-SDK adapters expose this
+        # helper to user code, which is expected to run inside its
+        # own tool dispatch loop and catch SaferBlocked (the
+        # `customer-support` example shows the pattern). On block we
+        # raise so the user can append a tool_result error block and
+        # let the assistant explain it on the next turn.
+        try:
+            check_or_raise(
+                "before_tool_use",
+                agent_id=self.agent_id,
+                session_id=self.session_id,
+                tool_name=tool_name,
+                args=args_dict,
+            )
+        except SaferBlocked:
+            raise
+        except Exception as e:  # pragma: no cover — helper soft-fails
+            log.debug("gateway check failed (soft-allow): %s", e)
 
     def after_tool_use(
         self,

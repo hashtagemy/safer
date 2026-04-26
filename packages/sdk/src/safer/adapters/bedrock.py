@@ -42,6 +42,8 @@ import uuid
 from typing import Any
 
 from ..client import SaferClient, get_client
+from ..exceptions import SaferBlocked
+from ..gateway_check import check_or_raise
 from ..events import (
     AfterLLMCallPayload,
     AfterToolUsePayload,
@@ -354,6 +356,22 @@ class _BedrockEmitter:
                 tool_input,
                 time.monotonic(),
             )
+            # Synchronous gateway check on the auto-detected toolUse.
+            # User code runs the bedrock toolUse → toolResult loop, so
+            # SaferBlocked propagates to the loop where the user adds a
+            # tool_result error block.
+            try:
+                check_or_raise(
+                    "before_tool_use",
+                    agent_id=self.agent_id,
+                    session_id=self.session_id,
+                    tool_name=tool_name,
+                    args=tool_input,
+                )
+            except SaferBlocked:
+                raise
+            except Exception as e:  # pragma: no cover — soft-fail
+                log.debug("gateway check failed (soft-allow): %s", e)
 
     def _drain_pending_tool_results(self, messages: list[Any]) -> None:
         """Walk messages for `toolResult` blocks that match pending
