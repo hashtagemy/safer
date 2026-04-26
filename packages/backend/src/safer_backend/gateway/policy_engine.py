@@ -58,6 +58,11 @@ class PolicyHit:
     flag: str
     evidence: list[str] = field(default_factory=list)
     recommended_mitigation: str | None = None
+    # Per-policy guard mode propagated from PolicyRule. `apply_mode`
+    # uses this so a Sonnet-compiled "Block any X" rule (which lands
+    # in the DB as guard_mode="enforce") actually blocks at runtime
+    # instead of waiting for the global mode to be CRITICAL.
+    guard_mode: str = "intervene"
 
 
 # ---------- Built-in policies (MVP) ----------
@@ -195,6 +200,7 @@ def _eval_pii_guard(rule: PolicyRule, event: dict[str, Any]) -> list[PolicyHit]:
             flag="pii_exposure",
             evidence=evidence,
             recommended_mitigation="Mask PII before sending to external tools.",
+            guard_mode=rule.guard_mode,
         )
     ]
 
@@ -216,6 +222,7 @@ def _eval_tool_allowlist(rule: PolicyRule, event: dict[str, Any]) -> list[Policy
             flag="unauthorized_tool_call",
             evidence=[f"tool={tool_name}"],
             recommended_mitigation=f"Only allowed tools: {', '.join(allowed)}",
+            guard_mode=rule.guard_mode,
         )
     ]
 
@@ -246,6 +253,7 @@ def _eval_loop_detection(rule: PolicyRule, event: dict[str, Any]) -> list[Policy
                 f"identical_recent_calls={same_count + 1}",
             ],
             recommended_mitigation="Break the loop; consider different strategy.",
+            guard_mode=rule.guard_mode,
         )
     ]
 
@@ -284,5 +292,6 @@ def _eval_regex_block(rule: PolicyRule, event: dict[str, Any]) -> list[PolicyHit
             flag=flags[0] if flags else "policy_violation",
             evidence=[m.group(0)[:120]],
             recommended_mitigation="Rephrase input to avoid the restricted pattern.",
+            guard_mode=rule.guard_mode,
         )
     ]

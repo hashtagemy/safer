@@ -85,10 +85,29 @@ def apply_mode(hits: list[PolicyHit], mode: GuardMode) -> Decision:
     risk = _max_risk(hits)
 
     if mode == GuardMode.MONITOR:
+        # Global monitor mode trumps everything — never block.
         return Decision(
             decision="warn",
             hits=hits,
             reason="guard_mode=monitor: logged but not enforced",
+            risk=risk,
+        )
+
+    # Per-hit `guard_mode="enforce"` (set by Sonnet when the user
+    # writes "Block any X") makes the hit terminal regardless of the
+    # global mode. This is what makes a natural-language "Block any
+    # email_recipe call to gmail" rule actually block the call —
+    # without it, a HIGH severity hit with a custom flag would just
+    # warn under INTERVENE.
+    enforce_hit = next(
+        (h for h in hits if getattr(h, "guard_mode", "intervene") == "enforce"),
+        None,
+    )
+    if enforce_hit is not None:
+        return Decision(
+            decision="block",
+            hits=hits,
+            reason=enforce_hit.recommended_mitigation or "policy violation",
             risk=risk,
         )
 
