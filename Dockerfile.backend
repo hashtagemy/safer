@@ -28,7 +28,7 @@ COPY README.md ./
 # Workspace manifests + lock file first (better Docker cache hit-rate).
 COPY pyproject.toml uv.lock ./
 COPY packages/sdk/pyproject.toml packages/sdk/README.md packages/sdk/
-COPY packages/backend/pyproject.toml packages/backend/pyproject.toml
+COPY packages/backend/pyproject.toml packages/backend/README.md packages/backend/
 
 # Source next — templates/ and schema.sql travel with the package.
 COPY packages/sdk/src packages/sdk/src
