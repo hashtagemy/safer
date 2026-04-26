@@ -36,9 +36,15 @@ import logging
 import os
 import subprocess
 import sys
+import warnings
 from pathlib import Path
 
-from strands import tool
+# Strands' anthropic adapter ships block types (ParsedTextBlock, etc.)
+# that pydantic + the installed anthropic SDK don't fully recognise.
+# The mismatch is harmless and noisy — silence it for a clean REPL.
+warnings.filterwarnings("ignore", category=UserWarning, module=r"pydantic\.")
+
+from strands import tool  # noqa: E402
 
 # Allow `from _chat import run_repl` even though we run this file directly.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -257,6 +263,7 @@ def build_agent():
             run_shell,
         ],
         system_prompt=SYSTEM_PROMPT,
+        callback_handler=None,
         hooks=[
             SaferHookProvider(
                 agent_id="system_diag",
